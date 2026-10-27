@@ -1,4 +1,7 @@
 using System.Collections.Generic;
+using System.IO;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace AfterHour.Combat;
 
@@ -82,4 +85,34 @@ public sealed class Tuning
         Weight.Heavy => WeightHeavy,
         _ => WeightStandard,
     };
+}
+
+/// <summary>Everything in data/combat.json. Plain lists; lookups are linear scans (the data is small).</summary>
+public sealed class CombatData
+{
+    public Tuning Tuning { get; set; } = new();
+    public string Brace { get; set; } = "brace";
+    public List<ActionDef> Actions { get; set; } = new();
+    public List<CombatantDef> Combatants { get; set; } = new();
+    public List<ItemDef> Items { get; set; } = new();
+    public List<EncounterDef> Encounters { get; set; } = new();
+
+    public ActionDef ActionById(string id) =>
+        Actions.Find(a => a.Id == id) ?? throw new KeyNotFoundException($"No action with id '{id}' in combat.json");
+
+    public CombatantDef UnitById(string id) =>
+        Combatants.Find(c => c.Id == id) ?? throw new KeyNotFoundException($"No combatant with id '{id}' in combat.json");
+
+    static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
+    {
+        IncludeFields = true,   // Tuning uses public fields
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new JsonStringEnumConverter() },
+    };
+
+    public static CombatData Load(string json) =>
+        JsonSerializer.Deserialize<CombatData>(json, Options) ?? throw new InvalidDataException("combat.json is empty");
+
+    public string ToJson() => JsonSerializer.Serialize(this, Options);
 }
