@@ -56,7 +56,20 @@ public partial class BattleScreen : Control
         _b.Emitted += _queue.Enqueue;
         _maxHp = _b.Party.Sum(p => p.Body.MaxHp);
         _startHp = _b.Party.Sum(p => p.Body.Hp);
+        _tuning = GetNode<TuningPanel>("%Tuning");
+        _tuning.Build(this);
         RunLoop();
+    }
+
+    TuningPanel _tuning = null!;
+
+    public override void _UnhandledInput(InputEvent e)
+    {
+        if (e is InputEventKey { Pressed: true, Echo: false, Keycode: Key.F1 })
+        {
+            _tuning.Toggle();
+            GetViewport().SetInputAsHandled();
+        }
     }
 
     /// <summary>
@@ -67,6 +80,7 @@ public partial class BattleScreen : Control
     {
         _b.PauseAfterEachTurn = true;
         _b.Run();
+        if (OS.GetCmdlineUserArgs().Contains("--tuning")) _tuning.Toggle();   // start with the panel open
         while (true)
         {
             await PlayEvents();
