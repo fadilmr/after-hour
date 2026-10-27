@@ -131,6 +131,9 @@ public sealed partial class Battle
     {
         why = "";
         if (unit.IsParty && Minutes < a.MinuteCost) why = $"Needs {a.MinuteCost} Minute{(a.MinuteCost == 1 ? "" : "s")}";
+        else if (a.HpCost > 0 && unit.Body.Hp <= HpCost(unit, a)) why = $"Needs more than {HpCost(unit, a)} HP";
+        else if (unit.Cooldowns.GetValueOrDefault(a.Id) is > 0 and var wait) why = $"Ready in {wait} turn{(wait == 1 ? "" : "s")}";
+        else if (IsItem(a) && Items.GetValueOrDefault(a.Id) <= 0) why = "None left";
         else if (a.Target is TargetType.Enemy or TargetType.Ally && Targets(unit, a).Count == 0) why = "No valid target";
         return why == "";
     }
@@ -142,11 +145,17 @@ public sealed partial class Battle
         var friends = (unit.IsParty ? Party : Enemies).Where(x => x.Alive);
         return a.Target switch
         {
-            TargetType.Enemy => foes.ToList(),
-            TargetType.Ally => friends.ToList(),
+            TargetType.Enemy => foes.Where(x => !(a.Rule == "skip" && x.SkippedSinceTurn)).ToList(),   // no Skip twice before it acts
+            TargetType.Ally => friends.Where(x => x != unit || !Pulls(a)).ToList(),                     // Fast-forward can't pick its user
             _ => [],
         };
     }
+
+    static bool Pulls(ActionDef a) => a.Effects?.Any(e => e.Type == EffectType.PullToFront) == true;
+
+    static int HpCost(Combatant u, ActionDef a) => (int)Math.Round(a.HpCost * u.Body.MaxHp, MidpointRounding.AwayFromZero);
+
+    bool IsItem(ActionDef a) => Data.Items.Exists(i => i.Action == a.Id);
 
     public IReadOnlyList<Combatant> ShiftReceivers() => [];
 
@@ -251,13 +260,31 @@ public sealed partial class Battle
         var targets = PartyTargets(u, a, c.Target);
         if (targets == null) return false;
 
-        Minutes -= a.MinuteCost;
+        Pay(u, a);
         Phase = BattlePhase.Resolve;
         _last = Resolve(u, a, targets);
         if (Phase == BattlePhase.BattleEnd) return true;
+        if (a.Effects?.Any(e => e.Type == EffectType.ExtraAction) == true)
+        {
+            Phase = BattlePhase.ChooseAction;   // Double Shift: she acts again now, countdown untouched
+            return true;
+        }
         Timeline.Reset(u, a.Weight);
         Phase = ShiftReceivers().Count > 0 || RushReady ? BattlePhase.Reactions : BattlePhase.TurnEnd;
         return true;
+    }
+
+    void Pay(Combatant u, ActionDef a)
+    {
+        if (a.MinuteCost > 0) AddMinutes(-a.MinuteCost);
+        if (a.HpCost > 0)
+        {
+            var cost = HpCost(u, a);
+            u.Body.Hp -= cost;   // CanUse guarantees she stays above 0
+            Emit(EventKind.Damage, u, cost, $"{u.Def.Name} pays {cost} HP.");
+        }
+        if (a.Cooldown > 0) u.Cooldowns[a.Id] = a.Cooldown;
+        if (IsItem(a)) Items[a.Id]--;
     }
 
     /// <summary>The units a party action hits, or null if the chosen target isn't allowed.</summary>
@@ -286,7 +313,10 @@ public sealed partial class Battle
         var u = Actor!;
         if (u.Alive)
         {
+            if (u.Has(StatusId.Fatigued)) u.Overtime = Math.Max(0, u.Overtime - T.FatiguedOt);
             TickStatuses(u);
+            foreach (var id in u.Cooldowns.Keys.ToList())
+                if (u.Cooldowns[id] > 0) u.Cooldowns[id]--;
             if (!u.IsParty) RollIntent(u);
         }
         Phase = CheckEnd() ? BattlePhase.BattleEnd : BattlePhase.TurnStart;
