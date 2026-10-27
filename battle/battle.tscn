@@ -1,0 +1,167 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://battle/BattleScreen.cs" id="1_battle"]
+[ext_resource type="Script" path="res://battle/TuningPanel.cs" id="2_tuning"]
+
+[node name="Battle" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_battle")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.06, 0.08, 0.14, 1)
+
+[node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 12
+
+[node name="Rows" type="VBoxContainer" parent="Margin"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Top" type="HBoxContainer" parent="Margin/Rows"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 10
+
+[node name="BoardPanel" type="PanelContainer" parent="Margin/Rows/Top"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+
+[node name="BoardBox" type="VBoxContainer" parent="Margin/Rows/Top/BoardPanel"]
+layout_mode = 2
+
+[node name="BoardTitle" type="Label" parent="Margin/Rows/Top/BoardPanel/BoardBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.6, 0.24, 1)
+text = "NEXT DEPARTURES"
+
+[node name="Board" type="VBoxContainer" parent="Margin/Rows/Top/BoardPanel/BoardBox"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="Minutes" type="Label" parent="Margin/Rows/Top/BoardPanel/BoardBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 10
+theme_override_font_sizes/font_size = 18
+
+[node name="Field" type="VBoxContainer" parent="Margin/Rows/Top"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="Banner" type="Label" parent="Margin/Rows/Top/Field"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+horizontal_alignment = 1
+
+[node name="Enemies" type="HBoxContainer" parent="Margin/Rows/Top/Field"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+alignment = 1
+
+[node name="Help" type="Label" parent="Margin/Rows/Top/Field"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.85, 0.88, 0.92, 1)
+autowrap_mode = 3
+
+[node name="Prompt" type="VBoxContainer" parent="Margin/Rows/Top/Field"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="Log" type="RichTextLabel" parent="Margin/Rows/Top"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+scroll_following = true
+
+[node name="Bottom" type="HBoxContainer" parent="Margin/Rows"]
+custom_minimum_size = Vector2(0, 190)
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Party" type="HBoxContainer" parent="Margin/Rows/Bottom"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="MenuPanel" type="PanelContainer" parent="Margin/Rows/Bottom"]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+
+[node name="Menu" type="VBoxContainer" parent="Margin/Rows/Bottom/MenuPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="Result" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -220.0
+offset_top = -90.0
+offset_right = 220.0
+offset_bottom = 90.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="ResultBox" type="VBoxContainer" parent="Result"]
+layout_mode = 2
+alignment = 1
+
+[node name="ResultText" type="Label" parent="Result/ResultBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+horizontal_alignment = 1
+
+[node name="Continue" type="Button" parent="Result/ResultBox"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Continue"
+
+[node name="Tuning" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -332.0
+offset_top = 12.0
+offset_right = -12.0
+offset_bottom = -222.0
+grow_horizontal = 0
+grow_vertical = 2
+script = ExtResource("2_tuning")
