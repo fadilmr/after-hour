@@ -177,7 +177,33 @@ public sealed partial class Battle
 
     bool RushPossible() => _last.Staggered && Enemies.Where(e => e.Alive).All(e => e.Body.Staggered);
 
-    public IReadOnlyList<Combatant> Preview(int n = 8) => Timeline.Preview(Living, n);
+    /// <summary>
+    /// The next n turns. With a hypothetical Act, shows the board as it would be after that action: the actor's
+    /// recovery, the action's delays and advances, and weakness delays the player already knows about.
+    /// </summary>
+    public IReadOnlyList<Combatant> Preview(int n = 8, Command? hypothetical = null)
+    {
+        if (hypothetical is not { Kind: CommandKind.Act, Unit: { } u, Action: { } a } || PartyTargets(u, a, hypothetical.Target) is not { } targets)
+            return Timeline.Preview(Living, n);
+
+        var cd = Living.ToDictionary(x => x, x => x.Countdown);
+        foreach (var t in targets.Where(cd.ContainsKey))
+        {
+            foreach (var fx in a.Effects ?? [])
+                cd[t] = fx.Type switch
+                {
+                    EffectType.Delay => cd[t] + fx.Amount * t.TurnLength,
+                    EffectType.Advance => Math.Max(0, cd[t] - fx.Amount * t.TurnLength),
+                    EffectType.PullToFront => 0,
+                    _ => cd[t],
+                };
+            if (a.Power > 0 && !t.IsParty && t.Def.Weak?.Contains(a.Element) == true && Known.Contains(KnownKey(t, a.Element)))
+                cd[t] += Math.Max(0, Math.Min(T.WeakDelay, T.DelayCap - t.WeakDelayTaken)) * t.TurnLength;
+        }
+        if (a.Weight != Weight.None && a.Effects?.Any(e => e.Type == EffectType.ExtraAction) != true)
+            cd[u] = u.TurnLength * T.WeightFactor(a.Weight);
+        return Timeline.Preview(Living, n, cd);
+    }
 
     void StartBattle()
     {
