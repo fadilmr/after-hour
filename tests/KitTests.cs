@@ -117,8 +117,24 @@ public class KitTests
             .Select(x => events[x.i + 1])
             .Select(next => next.Kind == EventKind.Damage && next.Target == dl ? next.Amount : 0)
             .ToList();
-        Assert.Equal(new[] { 13.0, 13.0, 0.0 }, ticks);   // 8% of 160 = 12.8 → 13, twice, then gone
+        Assert.Equal(new[] { 17.0, 17.0, 0.0 }, ticks);   // 8% of 210 = 16.8 → 17, twice, then gone
         Assert.False(dl.Has(StatusId.Burn));
+    }
+
+    [Fact]
+    public void BurnTickIsCappedAt40()
+    {
+        var b = NewBattle(["ines"], ["double_shift_day", "double_shift_night"]);
+        Exact(b);
+        var events = Record(b);
+        b.Run();
+        var day = b.Enemies[0];
+        day.Body.Stagger = day.Body.MaxStagger = 1000;
+        b.Minutes = 5;
+        Act(b, "ines_flambe", day);
+        while (events.Count(e => e.Kind == EventKind.TurnStart && e.Target == day) < 1) Act(b, "brace");
+        int start = events.FindIndex(e => e.Kind == EventKind.TurnStart && e.Target == day);
+        Assert.Equal(40, events[start + 1].Amount);   // 8% of 1,600 = 128, capped at 40
     }
 
     [Fact]
@@ -253,14 +269,14 @@ public class KitTests
         b.Run();                                       // Noa (95.2) first, then Bram (111.1)
         var (bram, noa) = (b.Party[0], b.Party[1]);
         var dl = b.Enemies[0];
-        Act(b, "noa_clock_in", dl);                    // pushes the Deadline back to 137.5, after Bram
+        Act(b, "noa_spark", dl);                       // weak to Volt: pushes the Deadline back to 137.5, after Bram
         Settle(b);                                     // decline the Shift Change prompt
         Assert.Same(bram, b.Actor);
         dl.Intent = b.Data.ActionById("deadline_final_notice");
         Act(b, "bram_paint_over", noa);                // shield = 20% of Bram's 360 = 72; then Final Notice lands
         Assert.Equal(72, Assert.Single(events, e => e.Kind == EventKind.Shield && e.Target == noa).Amount);
-        Assert.Equal(300, noa.Body.Hp);                // 2.5 × 28 × 100/120 = 58, all blocked
-        Assert.Equal(14, noa.Shield);
+        Assert.Equal(232, noa.Body.Hp);                // 2.5 × 67 × 100/120 = 140, 72 blocked
+        Assert.Equal(0, noa.Shield);
 
         while (b.Actor != bram) Act(b, "brace");
         noa.Shield = 100;

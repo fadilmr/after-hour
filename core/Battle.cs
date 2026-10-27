@@ -270,7 +270,7 @@ public sealed partial class Battle
         Emit(EventKind.TurnStart, u, Clock, $"{u.Def.Name}'s turn.");
         RemoveStatus(u, StatusId.Guard);
         if (u.Has(StatusId.Burn))
-            Hurt(u, (int)Math.Round(u.Body.MaxHp * T.BurnPct, MidpointRounding.AwayFromZero), $"{u.Def.Name} burns");
+            Hurt(u, Math.Min(T.BurnCap, (int)Math.Round(u.Body.MaxHp * T.BurnPct, MidpointRounding.AwayFromZero)), $"{u.Def.Name} burns");
         if (!u.Alive)
         {
             Phase = CheckEnd() ? BattlePhase.BattleEnd : BattlePhase.TurnStart;

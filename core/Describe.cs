@@ -42,7 +42,7 @@ public static class Describe
 
     public static string Status(StatusId s, Tuning t) => s switch
     {
-        StatusId.Burn => $"loses {Pct(t.BurnPct)} of max HP at the start of each turn",
+        StatusId.Burn => $"loses {Pct(t.BurnPct)} of max HP (at most {t.BurnCap}) at the start of each turn",
         StatusId.Chill => $"SPD -{Pct(t.ChillSlow)}",
         StatusId.Jolt => $"each hit taken delays it {Pct(t.JoltDelay)} more",
         StatusId.Echo => $"the next hit taken repeats at {Pct(t.EchoMult)}",

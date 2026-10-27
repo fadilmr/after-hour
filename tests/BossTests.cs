@@ -40,7 +40,7 @@ public class BossTests
         Settle(b);
         while (b.Actor!.Def.Id != "ines") Act(b, "brace");
         foreach (var e in b.Enemies.Where(e => e.Def.Body == null)) e.Body.Hp = 0;   // clear summoned Agenda Items
-        body.Stagger = 10;
+        body.Stagger = 5;
         Act(b, "ines_sear", b.Enemies[0]);             // breaks the body: Rush is offered
         Assert.True(b.RushReady);
         from = events.Count;
@@ -55,7 +55,7 @@ public class BossTests
         var events = Record(b);
         b.Run();
         var (day, night) = (b.Enemies[0], b.Enemies[1]);
-        day.Body.Stagger = 10;
+        day.Body.Stagger = 5;
         Act(b, "ines_sear", day);
         int brk = events.FindIndex(e => e.Kind == EventKind.StaggerBreak);
         Assert.True(brk >= 0);
@@ -91,7 +91,7 @@ public class BossTests
         var (day, night) = (b.Enemies[0], b.Enemies[1]);
         day.Body.Hp = 710;
         Assert.False(day.Body.ClauseActive);
-        Act(b, "ines_sear", day);                      // 31 damage: 679 < 700
+        Act(b, "ines_sear", day);                      // 31 damage: 679 < 800
         Assert.True(day.Body.ClauseActive);
         Assert.Contains(events, e => e.Kind == EventKind.Log && e.Text.Contains("Overtime Clause"));
         Assert.Equal(10000 / 90.0 / 1.2, day.TurnLength, 6);
@@ -139,7 +139,7 @@ public class BossTests
         day.Body.ClauseActive = true;
         day.Body.Counter = 2;
         day.Intent = b.Data.ActionById("boss_lights_out");
-        day.Body.Stagger = 10;
+        day.Body.Stagger = 5;
         Act(b, "ines_sear", night);
         Assert.Equal(4, day.Body.Counter);
         Assert.Equal(Intent.Recover, day.Intent!.Intent);   // the charged Lights Out is cancelled
@@ -157,7 +157,7 @@ public class BossTests
         night.Body.Hp = 1000;
         b.Minutes = 3;
         Act(b, "brace");                               // +1 → 4, then Unpaid Hours takes 1 → 3
-        Assert.Equal(1070, night.Body.Hp);             // +5% of 1,400
+        Assert.Equal(1080, night.Body.Hp);             // +5% of 1,600
         Assert.Equal(3, b.Minutes);
     }
 

@@ -8,8 +8,8 @@ public class DescribeTests
     static string Say(string id, bool enemy = false) => Describe.Action(D.ActionById(id), D, enemy);
 
     [Theory]
-    [InlineData("noa_clock_in", "Physical, Power 1.0, Stagger 10 to one enemy. +1 Minute.")]
-    [InlineData("ines_flambe", "Heat, Power 2.2, Stagger 25 to one enemy. Burn on one enemy (2 turns): loses 8% of max HP at the start of each turn.")]
+    [InlineData("noa_clock_in", "Physical, Power 1.0, Stagger 5 to one enemy. +1 Minute.")]
+    [InlineData("ines_flambe", "Heat, Power 2.2, Stagger 25 to one enemy. Burn on one enemy (2 turns): loses 8% of max HP (at most 40) at the start of each turn.")]
     [InlineData("noa_skip", "Delays one enemy by 25% of a turn. Can't target the same enemy again before it acts. Light: your next turn comes sooner.")]
     [InlineData("noa_fast_forward", "Pulls one ally's next turn to the front. Light: your next turn comes sooner.")]
     [InlineData("rook_hype_up", "Focus on one ally (2 turns): deals 25% more damage. Moves one ally up by 30% of a turn.")]
@@ -26,11 +26,11 @@ public class DescribeTests
 
     [Theory]
     [InlineData("rush_hour_jostle", "Physical, Power 0.4 × 3 hits to one party member.")]
-    [InlineData("hold_music_please_hold", "Delays one party member by 25% of a turn.")]
+    [InlineData("hold_music_please_hold", "Physical, Power 0.6 to one party member. Delays one party member by 25% of a turn.")]
     [InlineData("deadline_final_notice", "Physical, Power 2.5 to the whole party. Heavy: its next turn comes later.")]
     [InlineData("deadline_tick", "Counts down to its finisher.")]
     [InlineData("rush_hour_stall", "Does nothing. Heavy: its next turn comes later.")]
-    [InlineData("insomnia_steal", "Steals 1 Minute from the party.")]
+    [InlineData("insomnia_steal", "Physical, Power 0.6 to one party member. Steals 1 Minute from the party.")]
     [InlineData("endless_meeting_summon", "Calls in an Agenda Item (up to 2).")]
     [InlineData("boss_unpaid_hours", "Steals 1 Minute from the party. Heals itself for 5% of max HP.")]
     public void DescribesEnemyMoves(string id, string expected) => Assert.Equal(expected, Say(id, enemy: true));

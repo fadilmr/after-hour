@@ -58,7 +58,7 @@ public sealed class Tuning
 
     // Statuses
     public double BurnPct = 0.08, ChillSlow = 0.2, FatiguedSlow = 0.2, EchoMult = 0.5;
-    public int FatiguedOt = 10;
+    public int FatiguedOt = 10, BurnCap = 40;
 
     // Minutes
     public int MaxMinutes = 5, StartMinutes = 3;

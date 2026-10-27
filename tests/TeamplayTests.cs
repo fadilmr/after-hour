@@ -22,7 +22,7 @@ public class TeamplayTests
         var (noa, ines, dl) = (b.Party[0], b.Party[2], b.Enemies[0]);
         Act(b, "brace");
         Assert.Same(noa, b.Actor);
-        Act(b, "noa_clock_in", dl);                    // weak to Physical
+        Act(b, "noa_spark", dl);                       // weak to Volt
         Assert.Equal(BattlePhase.Reactions, b.Phase);
         Assert.Contains(ines, b.ShiftReceivers());
         Assert.True(Shift(b, ines));
@@ -123,11 +123,11 @@ public class TeamplayTests
     [Fact]
     public void OvertimeGainsAndCaps()
     {
-        // Acting: +15.
+        // Acting: +20.
         var a = NewBattle(["noa"], ["deadline"]);
         a.Run();
         Act(a, "brace");
-        Assert.Equal(15, a.Party[0].Overtime);
+        Assert.Equal(20, a.Party[0].Overtime);
 
         // A weakness hit: +15 once per action, even when the AoE hits two weak targets.
         var b = NewBattle(["rook"], ["agenda_item", "agenda_item"]);
@@ -138,12 +138,12 @@ public class TeamplayTests
         int act = events.FindIndex(e => e.Kind == EventKind.Action && e.Target == rook);
         var gained = events.Skip(act + 1).TakeWhile(e => e.Kind != EventKind.Action)
             .Where(e => e.Kind == EventKind.Overtime && e.Target == rook).Sum(e => e.Amount);
-        Assert.Equal(30, gained);
+        Assert.Equal(35, gained);                      // +20 acting, +15 weakness
 
-        // Hits taken: +5 each, at most +15 per enemy action. Jostle is 3 hits.
+        // Hits taken: +10 each, at most +20 per enemy action. Jostle is 3 hits.
         var c = NewBattle(["bram"], ["rush_hour"]);
         c.Run();                                       // Rush Hour first
-        Assert.Equal(15, c.Party[0].Overtime);
+        Assert.Equal(20, c.Party[0].Overtime);
 
         // The gauge caps at 100.
         var d = NewBattle(["noa"], ["deadline"]);
@@ -157,7 +157,7 @@ public class TeamplayTests
         e.Data.Tuning.FatiguedOt = 50;
         e.Run();
         e.Party[0].Statuses.Add(new StatusInstance { Id = StatusId.Fatigued, TurnsLeft = 2 });
-        Act(e, "brace");                               // 0 + 15 − 50 → 0
+        Act(e, "brace");                               // 0 + 20 − 50 → 0
         Assert.Equal(0, e.Party[0].Overtime);
     }
 
@@ -224,8 +224,8 @@ public class TeamplayTests
         var b = NewBattle(["noa", "rook", "ines"], ["agenda_item", "agenda_item"]);
         b.Run();                                       // Rook first
         var (noa, i1, i2) = (b.Party[0], b.Enemies[0], b.Enemies[1]);
-        Sturdy(i1, stagger: 10);
-        Sturdy(i2, stagger: 10);
+        Sturdy(i1, stagger: 5);
+        Sturdy(i2, stagger: 5);
         Act(b, "rook_feedback", i1);                   // breaks the first; the second still stands
         Assert.Equal(BattlePhase.Reactions, b.Phase);
         Assert.False(b.RushReady);
@@ -254,18 +254,18 @@ public class TeamplayTests
         var events = Record(b);
         b.Run();
         var (noa, i1, i2) = (b.Party[0], b.Enemies[0], b.Enemies[1]);
-        Sturdy(i1, stagger: 10);
-        Sturdy(i2, stagger: 10);
+        Sturdy(i1, stagger: 5);
+        Sturdy(i2, stagger: 5);
         Act(b, "rook_feedback", i1);
         Assert.True(Shift(b, noa));
         Act(b, "noa_clock_in", i2);
         int from = events.Count;
         Assert.True(b.Submit(new Command(CommandKind.Rush)));
-        // Power 1.2, no element, ×1.5 on Staggered, DEF 15: Noa 28 → 43.8 → 44, Rook 24 → 37.6 → 38, Ines 32 → 50.1 → 50.
+        // Power 1.0, no element, ×1.5 on Staggered, DEF 15: Noa 28 → 36.5 → 37, Rook 24 → 31.3 → 31, Ines 32 → 41.7 → 42.
         foreach (var item in new[] { i1, i2 })
         {
             var hits = events.Skip(from).Where(e => e.Kind == EventKind.Damage && e.Target == item).Select(e => e.Amount).OrderBy(x => x);
-            Assert.Equal(new[] { 38.0, 44.0, 50.0 }, hits);
+            Assert.Equal(new[] { 31.0, 37.0, 42.0 }, hits);
         }
         Assert.NotEqual(BattlePhase.Reactions, b.Phase);
     }

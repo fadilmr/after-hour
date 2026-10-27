@@ -62,30 +62,31 @@ public class BattleFlowTests
     [Fact]
     public void WeaknessHitDrainsStaggerAndDelays10Percent()
     {
-        var b = NewBattle(["noa"], ["deadline"]);
+        var b = NewBattle(["noa"], ["agenda_item"]);
         var events = Record(b);
         b.Run();
-        var deadline = b.Enemies[0];
-        Act(b, "noa_clock_in", deadline);
-        Assert.Equal(30, deadline.Body.Stagger);
-        var delay = Assert.Single(events, e => e.Kind == EventKind.Delay && e.Target == deadline);
-        Assert.Equal(12.5, delay.Amount, 6);   // 10% of 10000/80
-        Assert.Contains("deadline:Physical", b.Known);
+        var item = b.Enemies[0];
+        Act(b, "noa_clock_in", item);
+        Assert.Equal(25, item.Body.Stagger);  // basic attacks drain only 5
+        var delay = Assert.Single(events, e => e.Kind == EventKind.Delay && e.Target == item);
+        Assert.Equal(10, delay.Amount, 6);    // 10% of 10000/100
+        Assert.Contains("agenda_item:Physical", b.Known);
     }
 
     [Fact]
     public void DelayCapIs30Percent()
     {
         // Spec: five weakness hits on one enemy between its turns delay it 30% in total, not 50%.
-        var b = NewBattle(["noa"], ["deadline"]);
+        var b = NewBattle(["noa"], ["agenda_item"]);
         var events = Record(b);
         b.Run();
-        var deadline = b.Enemies[0];
-        deadline.Body.Stagger = deadline.Body.MaxStagger = 1000;
-        deadline.Countdown = 5000;
-        for (int i = 0; i < 5; i++) Act(b, "noa_clock_in", deadline);
-        var total = events.Where(e => e.Kind == EventKind.Delay && e.Target == deadline).Sum(e => e.Amount);
-        Assert.Equal(37.5, total, 6);
+        var item = b.Enemies[0];
+        item.Body.Hp = item.Body.MaxHp = 10000;
+        item.Body.Stagger = item.Body.MaxStagger = 1000;
+        item.Countdown = 5000;
+        for (int i = 0; i < 5; i++) Act(b, "noa_clock_in", item);
+        var total = events.Where(e => e.Kind == EventKind.Delay && e.Target == item).Sum(e => e.Amount);
+        Assert.Equal(30, total, 6);
     }
 
     [Fact]
@@ -98,7 +99,7 @@ public class BattleFlowTests
         b.Emitted += e => { if (e.Kind == EventKind.StaggerBreak) intentAtBreak = e.Target!.Intent?.Intent; };
         b.Run();
         var rh = b.Enemies[0];
-        rh.Body.Stagger = 10;                          // one Feedback (Stagger 10, Resonance = weak) breaks it
+        rh.Body.Stagger = 5;                           // one Feedback (Stagger 5, Resonance = weak) breaks it
         Act(b, "rook_feedback", rh);
 
         int brk = events.FindIndex(e => e.Kind == EventKind.StaggerBreak && e.Target == rh);
@@ -127,7 +128,7 @@ public class BattleFlowTests
         Assert.Equal(4, b.Minutes);
         Assert.Equal(0.75 * noa.TurnLength, b.Clock - clock1, 6);   // 71.4
         var hit = Assert.Single(events, e => e.Kind == EventKind.Damage && e.Target == noa);
-        Assert.Equal(11, hit.Amount);                  // 22 × 100/120 = 18.3, guarded ×0.6 = 11
+        Assert.Equal(26, hit.Amount);                  // 53 × 100/120 = 44.2, guarded ×0.6 = 26
         Assert.False(noa.Has(StatusId.Guard));         // Guard ends when her next turn starts
     }
 

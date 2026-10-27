@@ -14,7 +14,7 @@ public class EnemyTests
     static int Actions(List<BattleEvent> events, Combatant u) => events.Count(e => e.Kind == EventKind.Action && e.Target == u);
 
     [Fact]
-    public void DeadlineChargesThreeTurnsThenFinalNotice()
+    public void DeadlineChargesTwoTurnsThenFinalNotice()
     {
         var b = NewBattle(["noa", "rook"], ["deadline"]);
         Exact(b);
@@ -22,32 +22,32 @@ public class EnemyTests
         var dl = b.Enemies[0];
         var intents = IntentsAtTurnStart(b, dl);
         b.Run();
-        while (Actions(events, dl) < 4) Act(b, "brace");
-        Assert.Equal(new[] { Intent.Charge, Intent.Charge, Intent.Charge, Intent.Heavy }, intents.Select(a => a.Intent));
-        Assert.Equal("deadline_final_notice", intents[3].Id);
+        while (Actions(events, dl) < 3) Act(b, "brace");
+        Assert.Equal(new[] { Intent.Charge, Intent.Charge, Intent.Heavy }, intents.Select(a => a.Intent));
+        Assert.Equal("deadline_final_notice", intents[2].Id);
 
-        // Final Notice hits every member at Power 2.5 (both braced, ×0.6): Noa 58.3 → 35, Rook 59.3 → 36.
+        // Final Notice hits every member at Power 2.5 (both braced, ×0.6): Noa 139.6 → 84, Rook 141.9 → 85.
         int notice = events.FindLastIndex(e => e.Kind == EventKind.Action && e.Target == dl);
         var hits = events.Skip(notice).Where(e => e.Kind == EventKind.Damage).ToDictionary(e => e.Target!, e => e.Amount);
-        Assert.Equal(35, hits[b.Party[0]]);
-        Assert.Equal(36, hits[b.Party[1]]);
-        Assert.Equal(3, dl.Body.Counter);
+        Assert.Equal(84, hits[b.Party[0]]);
+        Assert.Equal(85, hits[b.Party[1]]);
+        Assert.Equal(2, dl.Body.Counter);
     }
 
     [Fact]
-    public void StaggeringDeadlineAtCount1ResetsTo3()
+    public void StaggeringDeadlineAtCount1ResetsTo2()
     {
-        // Spec: staggering a Deadline at count 1 resets it to 3.
+        // Spec: staggering a Deadline at count 1 resets it to 2.
         var b = NewBattle(["noa"], ["deadline"]);
         var events = Record(b);
         var dl = b.Enemies[0];
         b.Run();
-        Assert.Equal(3, dl.Body.Counter);
-        while (Actions(events, dl) < 2) Act(b, "brace");
+        Assert.Equal(2, dl.Body.Counter);
+        while (Actions(events, dl) < 1) Act(b, "brace");
         Assert.Equal(1, dl.Body.Counter);
-        dl.Body.Stagger = 10;
-        Act(b, "noa_clock_in", dl);                    // weak to Physical, Stagger 10: breaks it
-        Assert.Equal(3, dl.Body.Counter);
+        dl.Body.Stagger = 20;
+        Act(b, "noa_spark", dl);                       // weak to Volt, Stagger 20: breaks it
+        Assert.Equal(2, dl.Body.Counter);
     }
 
     [Fact]
@@ -57,6 +57,7 @@ public class EnemyTests
         var events = Record(b);
         var meeting = b.Enemies[0];
         var intents = IntentsAtTurnStart(b, meeting);
+        b.Party[0].Body.Hp = b.Party[0].Body.MaxHp = 10000;   // survive nine turns of bracing
         b.Run();
         while (intents.Count < 9) Act(b, "brace");
         var expected = new[] { "enemy_attack", "enemy_attack", "endless_meeting_summon",
@@ -77,8 +78,8 @@ public class EnemyTests
         var intents = IntentsAtTurnStart(b, rh);
         b.Run();                                       // Rush Hour (SPD 120) acts before Bram
         var firstHits = events.Where(e => e.Kind == EventKind.Damage).Select(e => (e.Target, e.Amount)).ToList();
-        Assert.Equal(3, firstHits.Count);              // 0.4 × 24 × 100/128 = 7.5 → 8, three times, on Bram
-        Assert.All(firstHits, h => Assert.Equal((b.Party[0], 8.0), h));
+        Assert.Equal(3, firstHits.Count);              // 0.4 × 58 × 100/128 = 18.1 → 18, three times, on Bram
+        Assert.All(firstHits, h => Assert.Equal((b.Party[0], 18.0), h));
 
         while (intents.Count < 7) Act(b, "brace");
         var expected = new[] { Weight.Standard, Weight.Standard, Weight.Light, Weight.Light, Weight.Light, Weight.Heavy, Weight.Standard };
@@ -129,8 +130,8 @@ public class EnemyTests
         var before = dl.Intent;
         Act(b, "noa_skip", dl);
         Assert.Same(before, atDelay);
-        dl.Body.Stagger = 10;
-        Act(b, "noa_clock_in", dl);
+        dl.Body.Stagger = 20;
+        Act(b, "noa_spark", dl);                       // weak to Volt, Stagger 20: breaks it
         Assert.Equal(Intent.Recover, atBreak);
     }
 }
