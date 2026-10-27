@@ -148,6 +148,33 @@ public class BattleFlowTests
     }
 
     [Fact]
+    public void PauseAfterEachTurnLetsTheScreenCatchUp()
+    {
+        var b = NewBattle(["noa"], ["rush_hour"]);    // Rush Hour acts first
+        var events = Record(b);
+        b.PauseAfterEachTurn = true;
+        b.Run();                                       // battle start: countdowns set, intents rolled, nobody has acted
+        Assert.Equal(BattlePhase.TurnStart, b.Phase);
+        Assert.False(b.AwaitingInput);
+        Assert.DoesNotContain(events, e => e.Kind == EventKind.TurnStart);
+        Assert.NotNull(b.Enemies[0].Intent);
+        b.Run();
+        Assert.Equal(BattlePhase.TurnStart, b.Phase); // stopped after Rush Hour's turn, not waiting on the player
+        Assert.False(b.AwaitingInput);
+        Assert.Single(events, e => e.Kind == EventKind.TurnStart);
+        b.Run();
+        Assert.Equal(BattlePhase.ChooseAction, b.Phase);
+        Assert.True(b.AwaitingInput);
+
+        b.Party[0].Overtime = 100;                     // a full gauge opens the cut-in window before Rush Hour's turn
+        b.Enemies[0].Countdown = 0;
+        Act(b, "brace");
+        while (!b.AwaitingInput) b.Run();
+        Assert.Equal(BattlePhase.TurnStart, b.Phase);
+        Assert.Same(b.Enemies[0], b.Actor);
+    }
+
+    [Fact]
     public void AllPartyKoIsDefeat()
     {
         var b = NewBattle(["noa"], ["rush_hour"]);    // Rush Hour acts first: Jostle, 3 hits

@@ -27,7 +27,8 @@ static class TestData
     public static void Settle(Battle b)
     {
         while (b.Phase is BattlePhase.TurnStart or BattlePhase.Reactions)
-            Assert.True(b.Submit(new Command(CommandKind.Pass)));
+            if (b.AwaitingInput) Assert.True(b.Submit(new Command(CommandKind.Pass)));
+            else b.Run();                              // paused between turns
     }
 
     /// <summary>Declines any open prompt, then submits an action for the current actor and asserts it was legal.</summary>

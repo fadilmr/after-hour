@@ -90,9 +90,16 @@ public sealed partial class Battle
         set => _minutes = Math.Clamp(value, 0, Data.Tuning.MaxMinutes);
     }
 
+    /// <summary>When set, Run() also returns after every finished turn, so a screen can replay one turn at a time.</summary>
+    public bool PauseAfterEachTurn { get; set; }
+
+    /// <summary>True when the battle waits on the player: a turn to choose, a Reactions prompt, or the cut-in window.</summary>
+    public bool AwaitingInput => Phase is BattlePhase.ChooseAction or BattlePhase.Reactions || (Phase == BattlePhase.TurnStart && _windowOpen);
+
     Tuning T => Data.Tuning;
     readonly Dictionary<string, Body> _bodies = new();
     readonly HashSet<Combatant> _chain = new();   // members who acted in the current Shift Change chain
+    bool _windowOpen;      // the cut-in window is waiting before an enemy turn
     bool _windowPassed;    // the player let the peeked enemy act without cutting in
     ActionReport _last;    // what the current turn's action did, for Reactions
 
@@ -105,10 +112,16 @@ public sealed partial class Battle
         {
             switch (Phase)
             {
-                case BattlePhase.BattleStart: StartBattle(); break;
+                case BattlePhase.BattleStart:
+                    StartBattle();
+                    if (PauseAfterEachTurn && Phase == BattlePhase.TurnStart) return;   // let the screen show the opening state
+                    break;
                 case BattlePhase.TurnStart: if (!NextTurn()) return; break;
                 case BattlePhase.RunIntent: EnemyTurn(); break;
-                case BattlePhase.TurnEnd: EndTurn(); break;
+                case BattlePhase.TurnEnd:
+                    EndTurn();
+                    if (PauseAfterEachTurn && Phase == BattlePhase.TurnStart) return;
+                    break;
                 default: return;
             }
         }
@@ -120,8 +133,9 @@ public sealed partial class Battle
         bool ok = (Phase, c.Kind) switch
         {
             (BattlePhase.ChooseAction, CommandKind.Act) => Act(c),
-            (BattlePhase.ChooseAction or BattlePhase.TurnStart, CommandKind.CutIn) => CutIn(c),
-            (BattlePhase.TurnStart, CommandKind.Pass) => LetEnemyAct(),
+            (BattlePhase.ChooseAction, CommandKind.CutIn) => CutIn(c),
+            (BattlePhase.TurnStart, CommandKind.CutIn) when _windowOpen => CutIn(c),
+            (BattlePhase.TurnStart, CommandKind.Pass) when _windowOpen => LetEnemyAct(),
             (BattlePhase.Reactions, CommandKind.ShiftChange) => ShiftChange(c),
             (BattlePhase.Reactions, CommandKind.Rush) => Rush(),
             (BattlePhase.Reactions, CommandKind.Pass) => EndReactions(),
@@ -181,10 +195,10 @@ public sealed partial class Battle
     /// The next n turns. With a hypothetical Act, shows the board as it would be after that action: the actor's
     /// recovery, the action's delays and advances, and weakness delays the player already knows about.
     /// </summary>
-    public IReadOnlyList<Combatant> Preview(int n = 8, Command? hypothetical = null)
+    public IReadOnlyList<Combatant> Preview(int n = 8, Command? hypothetical = null, List<double>? times = null)
     {
         if (hypothetical is not { Kind: CommandKind.Act, Unit: { } u, Action: { } a } || PartyTargets(u, a, hypothetical.Target) is not { } targets)
-            return Timeline.Preview(Living, n);
+            return Timeline.Preview(Living, n, times: times);
 
         var cd = Living.ToDictionary(x => x, x => x.Countdown);
         foreach (var t in targets.Where(cd.ContainsKey))
@@ -202,7 +216,7 @@ public sealed partial class Battle
         }
         if (a.Weight != Weight.None && a.Effects?.Any(e => e.Type == EffectType.ExtraAction) != true)
             cd[u] = u.TurnLength * T.WeightFactor(a.Weight);
-        return Timeline.Preview(Living, n, cd);
+        return Timeline.Preview(Living, n, cd, times);
     }
 
     void StartBattle()
@@ -228,7 +242,8 @@ public sealed partial class Battle
     bool NextTurn()
     {
         var next = Timeline.Next(Living);
-        if (!next.IsParty && !_windowPassed && Party.Any(p => p.Alive && p.Overtime >= T.OtMax))
+        _windowOpen = !next.IsParty && !_windowPassed && Party.Any(p => p.Alive && p.Overtime >= T.OtMax);
+        if (_windowOpen)
         {
             Actor = next;
             return false;

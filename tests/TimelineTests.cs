@@ -90,8 +90,10 @@ public class TimelineTests
         // Hand-derived: fast@50, fast@100 (tie with slow, party first), slow@100, fast@150, fast@200, slow@200, fast@250, fast@300.
         var fast = Unit(200, countdown: 50);
         var slow = Unit(100, party: false, countdown: 100);
-        var order = Timeline.Preview(new[] { fast, slow }, 8);
+        var times = new List<double>();
+        var order = Timeline.Preview(new[] { fast, slow }, 8, times: times);
         Assert.Equal(new[] { fast, fast, slow, fast, fast, slow, fast, fast }, order);
+        Assert.Equal(new double[] { 50, 100, 100, 150, 200, 200, 250, 300 }, times);   // time until each turn
         Assert.Equal(50, fast.Countdown);
         Assert.Equal(100, slow.Countdown);
     }

@@ -47,9 +47,10 @@ public static class Timeline
 
     /// <summary>
     /// The next n turns, without changing anyone. Party turns assume a Standard action; an enemy's
-    /// first turn uses its queued intent's weight. Pass countdowns to preview a hypothetical state.
+    /// first turn uses its queued intent's weight. Pass countdowns to preview a hypothetical state,
+    /// and a times list to receive how long from now each turn comes.
     /// </summary>
-    public static List<Combatant> Preview(IEnumerable<Combatant> living, int n, IDictionary<Combatant, double>? countdowns = null)
+    public static List<Combatant> Preview(IEnumerable<Combatant> living, int n, IDictionary<Combatant, double>? countdowns = null, List<double>? times = null)
     {
         var units = living.ToList();
         var order = new List<Combatant>(n);
@@ -57,11 +58,14 @@ public static class Timeline
 
         var cd = units.ToDictionary(u => u, u => countdowns != null && countdowns.TryGetValue(u, out var c) ? c : u.Countdown);
         var seen = new HashSet<Combatant>();
+        double now = 0;
         for (int i = 0; i < n; i++)
         {
             var next = Next(units, u => cd[u]);
             var elapsed = cd[next];
             foreach (var u in units) cd[u] = Math.Max(0, cd[u] - elapsed);
+            now += elapsed;
+            times?.Add(now);
             order.Add(next);
 
             var w = !next.IsParty && seen.Add(next) && next.Intent is { } intent ? intent.Weight : Weight.Standard;
