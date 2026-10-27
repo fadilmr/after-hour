@@ -92,8 +92,9 @@ public sealed partial class Battle
 
     Tuning T => Data.Tuning;
     readonly Dictionary<string, Body> _bodies = new();
+    readonly HashSet<Combatant> _chain = new();   // members who acted in the current Shift Change chain
     bool _windowPassed;    // the player let the peeked enemy act without cutting in
-    ActionReport _last;    // what the last party action did, for Reactions
+    ActionReport _last;    // what the current turn's action did, for Reactions
 
     public static string KnownKey(Combatant u, Element e) => $"{u.Def.Body ?? u.Def.Id}:{e}";
 
@@ -119,7 +120,10 @@ public sealed partial class Battle
         bool ok = (Phase, c.Kind) switch
         {
             (BattlePhase.ChooseAction, CommandKind.Act) => Act(c),
+            (BattlePhase.ChooseAction or BattlePhase.TurnStart, CommandKind.CutIn) => CutIn(c),
             (BattlePhase.TurnStart, CommandKind.Pass) => LetEnemyAct(),
+            (BattlePhase.Reactions, CommandKind.ShiftChange) => ShiftChange(c),
+            (BattlePhase.Reactions, CommandKind.Rush) => Rush(),
             (BattlePhase.Reactions, CommandKind.Pass) => EndReactions(),
             _ => false,
         };
@@ -157,9 +161,21 @@ public sealed partial class Battle
 
     bool IsItem(ActionDef a) => Data.Items.Exists(i => i.Action == a.Id);
 
-    public IReadOnlyList<Combatant> ShiftReceivers() => [];
+    /// <summary>Who can take a Shift Change right now: living members who haven't acted in this chain.</summary>
+    public IReadOnlyList<Combatant> ShiftReceivers() => Phase == BattlePhase.Reactions ? Receivers() : [];
 
-    public bool RushReady => false;
+    /// <summary>The action just Staggered an enemy, and every enemy still standing is Staggered.</summary>
+    public bool RushReady => Phase == BattlePhase.Reactions && RushPossible();
+
+    List<Combatant> Receivers()
+    {
+        var passer = Actor;
+        if (passer == null || !(_last.HitWeakness || _last.Staggered) || !Enemies.Any(e => e.Alive)) return [];
+        if (passer.BondRank is { } rank && rank < T.ShiftUnlockRank) return [];   // Noa (no rank) can always pass
+        return Party.Where(p => p.Alive && !_chain.Contains(p)).ToList();
+    }
+
+    bool RushPossible() => _last.Staggered && Enemies.Where(e => e.Alive).All(e => e.Body.Staggered);
 
     public IReadOnlyList<Combatant> Preview(int n = 8) => Timeline.Preview(Living, n);
 
@@ -196,6 +212,7 @@ public sealed partial class Battle
         Timeline.Pass(Living, elapsed);
         Clock += elapsed;
         ChainPasses = 0;
+        _chain.Clear();
         BeginTurn(next);
         return true;
     }
@@ -203,6 +220,8 @@ public sealed partial class Battle
     void BeginTurn(Combatant u)
     {
         Actor = u;
+        _last = default;
+        if (u.IsParty) _chain.Add(u);
         TurnCount++;
         u.TurnsTaken++;
         u.WeakDelayTaken = 0;
@@ -270,8 +289,74 @@ public sealed partial class Battle
             return true;
         }
         Timeline.Reset(u, a.Weight);
-        Phase = ShiftReceivers().Count > 0 || RushReady ? BattlePhase.Reactions : BattlePhase.TurnEnd;
+        if (a.Weight != Weight.None) GainOvertime(u, T.OtPerAction);
+        if (_last.HitWeakness) GainOvertime(u, T.OtPerWeakness);
+        Phase = Receivers().Count > 0 || RushPossible() ? BattlePhase.Reactions : BattlePhase.TurnEnd;
         return true;
+    }
+
+    /// <summary>A full Overtime gauge cuts in: resolves at once, never touches the user's countdown, earns nothing.</summary>
+    bool CutIn(Command c)
+    {
+        var m = c.Unit;
+        if (m == null || !m.IsParty || !m.Alive || m.Overtime < T.OtMax || m.Def.Overtime == null) return false;
+        var a = Data.ActionById(m.Def.Overtime);
+        var targets = PartyTargets(m, a, c.Target);
+        if (targets == null) return false;
+
+        var (phase, actor) = (Phase, Actor);
+        GainOvertime(m, -m.Overtime);
+        Emit(EventKind.CutIn, m, 0, $"{m.Def.Name} cuts in: {a.Name}!");
+        Phase = BattlePhase.Resolve;
+        Resolve(m, a, targets);
+        if (Phase == BattlePhase.BattleEnd) return true;
+        (Phase, Actor) = (phase, actor);   // the window re-peeks the Timeline; a chosen turn carries on
+        return true;
+    }
+
+    /// <summary>The passer's turn ends here; the receiver's next turn is pulled forward and starts now.</summary>
+    bool ShiftChange(Command c)
+    {
+        var passer = Actor!;
+        var r = c.Unit;
+        if (r == null || !Receivers().Contains(r)) return false;
+
+        WrapUp(passer);
+        ChainPasses++;
+        Emit(EventKind.ShiftChange, r, ChainPasses, $"Shift Change! {passer.Def.Name} hands off to {r.Def.Name}.");
+        if (passer.BondRank >= 3) AddMinutes(T.ShiftRank3Minutes);
+        if (passer.BondRank >= 4) Heal(r, Round(T.ShiftRank4Heal * r.Body.MaxHp));
+        if (r.BondRank >= 3 && r.Def.Passives?.Contains("crowd_work") == true) GainOvertime(r, T.CrowdWorkOt);
+        r.Countdown = 0;
+        BeginTurn(r);
+        return true;
+    }
+
+    static readonly ActionDef RushAction = new("rush", "Rush");
+
+    /// <summary>Every member hits every enemy body once. Costs nothing and uses no one's turn.</summary>
+    bool Rush()
+    {
+        if (!RushPossible()) return false;
+        Emit(EventKind.Rush, null, 0, "Rush! Everyone piles in!");
+        _hitOt.Clear();
+        foreach (var m in Party.Where(p => p.Alive).ToList())
+            foreach (var e in Enemies.Where(x => x.Alive).DistinctBy(x => x.Body).ToList())
+            {
+                if (!e.Alive) continue;
+                Strike(m, e, RushAction, rush: true);
+                if (CheckEnd()) return true;
+            }
+        Phase = BattlePhase.TurnEnd;
+        return true;
+    }
+
+    void GainOvertime(Combatant u, int amount)
+    {
+        var before = u.Overtime;
+        u.Overtime = Math.Clamp(u.Overtime + amount, 0, T.OtMax);
+        if (u.Overtime != before)
+            Emit(EventKind.Overtime, u, u.Overtime - before, u.Overtime >= T.OtMax ? $"{u.Def.Name}'s Overtime is ready!" : "");
     }
 
     void Pay(Combatant u, ActionDef a)
@@ -313,13 +398,19 @@ public sealed partial class Battle
         var u = Actor!;
         if (u.Alive)
         {
-            if (u.Has(StatusId.Fatigued)) u.Overtime = Math.Max(0, u.Overtime - T.FatiguedOt);
-            TickStatuses(u);
-            foreach (var id in u.Cooldowns.Keys.ToList())
-                if (u.Cooldowns[id] > 0) u.Cooldowns[id]--;
+            WrapUp(u);
             if (!u.IsParty) RollIntent(u);
         }
         Phase = CheckEnd() ? BattlePhase.BattleEnd : BattlePhase.TurnStart;
+    }
+
+    /// <summary>End-of-turn bookkeeping: Fatigued drains Overtime, statuses and cooldowns count down.</summary>
+    void WrapUp(Combatant u)
+    {
+        if (u.Has(StatusId.Fatigued)) GainOvertime(u, -T.FatiguedOt);
+        TickStatuses(u);
+        foreach (var id in u.Cooldowns.Keys.ToList())
+            if (u.Cooldowns[id] > 0) u.Cooldowns[id]--;
     }
 
     void RollIntent(Combatant e)

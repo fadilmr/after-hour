@@ -254,6 +254,7 @@ public class KitTests
         var (bram, noa) = (b.Party[0], b.Party[1]);
         var dl = b.Enemies[0];
         Act(b, "noa_clock_in", dl);                    // pushes the Deadline back to 137.5, after Bram
+        Settle(b);                                     // decline the Shift Change prompt
         Assert.Same(bram, b.Actor);
         dl.Intent = b.Data.ActionById("deadline_final_notice");
         Act(b, "bram_paint_over", noa);                // shield = 20% of Bram's 360 = 72; then Final Notice lands

@@ -23,9 +23,17 @@ static class TestData
         b.Data.Tuning.SpreadMin = b.Data.Tuning.SpreadMax = 1;
     }
 
-    /// <summary>Submits an action for the current actor and asserts it was legal.</summary>
+    /// <summary>Declines whatever prompt is open (cut-in window, Reactions) until a turn needs a choice.</summary>
+    public static void Settle(Battle b)
+    {
+        while (b.Phase is BattlePhase.TurnStart or BattlePhase.Reactions)
+            Assert.True(b.Submit(new Command(CommandKind.Pass)));
+    }
+
+    /// <summary>Declines any open prompt, then submits an action for the current actor and asserts it was legal.</summary>
     public static void Act(Battle b, string actionId, Combatant? target = null)
     {
+        Settle(b);
         Assert.Equal(BattlePhase.ChooseAction, b.Phase);
         Assert.True(b.Submit(new Command(CommandKind.Act, b.Actor, b.Data.ActionById(actionId), target)), $"{actionId} was refused");
     }

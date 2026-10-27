@@ -11,13 +11,15 @@ public sealed partial class Battle
 
     static readonly StatusId[] Debuffs = [StatusId.Burn, StatusId.Chill, StatusId.Jolt, StatusId.Echo, StatusId.Pressure, StatusId.Fatigued];
 
-    bool _nightWatchUsed;   // once per enemy action
+    bool _nightWatchUsed;                                   // once per enemy action
+    readonly Dictionary<Combatant, int> _hitOt = new();     // Overtime from hits taken, capped per enemy action
 
     /// <summary>Per target: the damage hits, then weakness and Stagger, then the Echo repeat, then effects.</summary>
     ActionReport Resolve(Combatant actor, ActionDef a, List<Combatant> targets)
     {
         Emit(EventKind.Action, actor, 0, $"{actor.Def.Name}: {a.Name}");
         _nightWatchUsed = false;
+        _hitOt.Clear();
         if (a.MinuteGain > 0) AddMinutes(a.MinuteGain);
         bool weak = false, broke = false;
         foreach (var target in targets)
@@ -42,12 +44,23 @@ public sealed partial class Battle
     (bool weak, bool broke) Strike(Combatant attacker, Combatant target, ActionDef a, bool rush = false)
     {
         target = NightWatch(attacker, target);
-        var hit = Damage.Compute(T, attacker, target, a, attacker.IsParty ? ChainPasses : 0, Rng, rush);
+        var chain = attacker.IsParty && !rush ? ChainPasses : 0;   // Rush gets no Shift Change bonus
+        var hit = Damage.Compute(T, attacker, target, a, chain, Rng, rush);
         if (!rush && a.Element != Element.None && !target.IsParty) Known.Add(KnownKey(target, a.Element));
         if (hit.Weak) Emit(EventKind.Weakness, target, 0, "Weak!");
         if (hit.Resist) Emit(EventKind.Resist, target, 0, "Resisted.");
         if (hit.Crit) Emit(EventKind.Crit, target, 0, "Critical!");
         Hurt(target, hit.Amount, $"{attacker.Def.Name} hits {target.Def.Name}");
+        if (target.IsParty && !attacker.IsParty && target.Alive)
+        {
+            var got = _hitOt.GetValueOrDefault(target);
+            var add = Math.Min(T.OtPerHitTaken, T.OtPerEnemyActionCap - got);
+            if (add > 0)
+            {
+                _hitOt[target] = got + add;
+                GainOvertime(target, add);
+            }
+        }
 
         bool broke = false;
         if (hit.Weak && target.Alive)
