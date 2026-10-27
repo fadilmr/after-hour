@@ -240,8 +240,9 @@ public partial class BattleScreen : Control
         return card;
     }
 
+    /// <summary>Only while the battle is actually waiting on the player, never during a turn's playback.</summary>
     bool CanCutIn(Combatant m) => !_s.Autoplay && m.Alive && m.Def.Overtime != null && m.Overtime >= T.OtMax
-        && _b.Phase is BattlePhase.ChooseAction or BattlePhase.TurnStart;
+        && _b.AwaitingInput && _b.Phase is BattlePhase.ChooseAction or BattlePhase.TurnStart;
 
     string Affinity(Combatant e, Element el)
     {
