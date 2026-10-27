@@ -446,6 +446,6 @@ public sealed partial class Battle
         return u;
     }
 
-    void Emit(EventKind kind, Combatant? target, double amount, string text) =>
+    internal void Emit(EventKind kind, Combatant? target, double amount, string text) =>
         Emitted?.Invoke(new BattleEvent(kind, target, amount, text));
 }

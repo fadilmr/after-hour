@@ -105,6 +105,7 @@ public sealed partial class Battle
         target.Shield -= blocked;
         target.Body.Hp = Math.Max(0, target.Body.Hp - (amount - blocked));
         Emit(EventKind.Damage, target, amount - blocked, blocked > 0 ? $"{text} for {amount} ({blocked} blocked)." : $"{text} for {amount}.");
+        if (!target.IsParty && target.Alive) EnemyAi.OnDamaged(this, target);
         if (target.Body.Hp == 0)
             foreach (var u in Party.Concat(Enemies).Where(x => x.Body == target.Body))
             {
