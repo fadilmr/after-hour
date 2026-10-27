@@ -350,7 +350,9 @@ public sealed partial class Battle
             shared = new Body { Hp = def.MaxHp, MaxHp = def.MaxHp, Stagger = def.MaxStagger, MaxStagger = def.MaxStagger };
             _bodies[key] = shared;
         }
-        return Combatant.Create(def, false, T, shared);
+        var u = Combatant.Create(def, false, T, shared);
+        EnemyAi.OnSpawn(this, u);
+        return u;
     }
 
     void Emit(EventKind kind, Combatant? target, double amount, string text) =>
