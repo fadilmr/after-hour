@@ -120,6 +120,7 @@ public partial class BattleScreen : Control
 			case Key.Tab:
 				_inspect = !_inspect;
 				DrawField();
+				SizeDesc();
 				ShowDesc();
 				break;
 			case Key.F: CycleSpeed(); break;
@@ -767,6 +768,7 @@ public partial class BattleScreen : Control
 		foreach (var r in rows) box.AddChild(r);
 		_descLabel = DescLabel(400);
 		box.AddChild(_descLabel);
+		SizeDesc();
 		var panel = Ui.Wrap(box, Ui.Box(Ui.Panel, Ui.Danger, 2, 12, 16, 14));
 		panel.CustomMinimumSize = new Vector2(440, 0);
 		var view = _views.TryGetValue(actor, out var v) ? v : null;
@@ -822,6 +824,7 @@ public partial class BattleScreen : Control
 		foreach (var r in rows) list.AddChild(r);
 		_descLabel = DescLabel(388);
 		Fill(_command, [header, list, _descLabel, Hints(back != null)]);
+		SizeDesc();
 		_commandBox.Visible = true;
 		DrawPips();
 		(rows.FirstOrDefault(r => !r.Disabled) ?? rows.FirstOrDefault())?.GrabFocus();
@@ -832,8 +835,23 @@ public partial class BattleScreen : Control
 	{
 		var label = Ui.L("", Ui.Body, 16, Ui.Dim);
 		label.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+		label.VerticalAlignment = VerticalAlignment.Top;
 		label.CustomMinimumSize = new Vector2(width, 0);
 		return label;
+	}
+
+	/// <summary>
+	/// The description gets a fixed number of lines (more under Inspect), so hovering rows never resizes the box.
+	/// The command box is anchored at its bottom, so any change in height would move the rows under the mouse.
+	/// </summary>
+	void SizeDesc()
+	{
+		if (_descLabel == null || !IsInstanceValid(_descLabel)) return;
+		int lines = _inspect ? 6 : 3;
+		_descLabel.MaxLinesVisible = lines;
+		var lineHeight = Ui.Body.GetHeight(16) + _descLabel.GetThemeConstant("line_spacing");
+		_descLabel.CustomMinimumSize = _descLabel.CustomMinimumSize with { Y = Mathf.Ceil(lines * lineHeight) };
+		Callable.From(PlaceCommandBox).CallDeferred();
 	}
 
 	/// <summary>The box sits in the party's column, just above the chips, so it never covers an enemy.</summary>
@@ -899,8 +917,6 @@ public partial class BattleScreen : Control
 		if (_inspect && _b.Actor is { IsParty: true } u)
 			text = string.Join("\n", (u.Def.Passives ?? []).Select(p => Describe.Passive(p, T)).Prepend(text).Where(s => s != ""));
 		_descLabel.Text = text;
-		_descLabel.Visible = text != "";
-		Callable.From(PlaceCommandBox).CallDeferred();
 	}
 
 	/// <summary>Minutes pips; a preview shows spent pips hollow and gained ones half-lit.</summary>
