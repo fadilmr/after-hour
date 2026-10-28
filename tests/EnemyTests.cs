@@ -135,3 +135,34 @@ public class EnemyTests
         Assert.Equal(Intent.Recover, atBreak);
     }
 }
+
+public class IntentTargetTests
+{
+    [Fact]
+    public void EnemyHitsTheTargetItShowed()
+    {
+        for (int seed = 1; seed <= 20; seed++)
+        {
+            var b = TestData.NewBattle(["noa", "rook", "ines"], ["rush_hour"], seed: seed);
+            b.PauseAfterEachTurn = true;
+            b.Run();                                   // start: intents roll
+            var rh = b.Enemies[0];
+            var shown = rh.IntentTarget;
+            Assert.NotNull(shown);
+            Assert.True(shown!.IsParty);
+            var events = TestData.Record(b);
+            b.Run();                                   // Rush Hour (SPD 120) acts first
+            Assert.All(events.Where(e => e.Kind == EventKind.Damage), e => Assert.Equal(shown, e.Target));
+        }
+    }
+
+    [Fact]
+    public void SelfIntentHasNoTarget()
+    {
+        var b = TestData.NewBattle(["noa"], ["deadline"]);
+        b.PauseAfterEachTurn = true;
+        b.Run();
+        Assert.Equal(Intent.Charge, b.Enemies[0].Intent!.Intent);
+        Assert.Null(b.Enemies[0].IntentTarget);
+    }
+}

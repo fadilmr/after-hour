@@ -20,135 +20,176 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-color = Color(0.06, 0.08, 0.14, 1)
+color = Color(0.043, 0.063, 0.125, 1)
 
-[node name="Margin" type="MarginContainer" parent="."]
+[node name="Ground" type="ColorRect" parent="."]
+layout_mode = 0
+offset_left = 660.0
+offset_top = 598.0
+offset_right = 1920.0
+offset_bottom = 601.0
+mouse_filter = 2
+color = Color(0.29, 0.25, 0.15, 1)
+
+[node name="Field" type="Control" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/margin_left = 12
-theme_override_constants/margin_top = 12
-theme_override_constants/margin_right = 12
-theme_override_constants/margin_bottom = 12
+mouse_filter = 2
 
-[node name="Rows" type="VBoxContainer" parent="Margin"]
+[node name="Board" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(330, 0)
+layout_mode = 0
+offset_left = 40.0
+offset_top = 40.0
+offset_right = 370.0
+offset_bottom = 80.0
+
+[node name="BoardBox" type="VBoxContainer" parent="Board"]
 layout_mode = 2
-theme_override_constants/separation = 10
+theme_override_constants/separation = 6
 
-[node name="Top" type="HBoxContainer" parent="Margin/Rows"]
-layout_mode = 2
-size_flags_vertical = 3
-theme_override_constants/separation = 10
-
-[node name="BoardPanel" type="PanelContainer" parent="Margin/Rows/Top"]
-custom_minimum_size = Vector2(300, 0)
-layout_mode = 2
-
-[node name="BoardBox" type="VBoxContainer" parent="Margin/Rows/Top/BoardPanel"]
+[node name="Location" type="Label" parent="Board/BoardBox"]
+unique_name_in_owner = true
 layout_mode = 2
 
-[node name="BoardTitle" type="Label" parent="Margin/Rows/Top/BoardPanel/BoardBox"]
+[node name="BoardTitle" type="Label" parent="Board/BoardBox"]
+unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(1, 0.6, 0.24, 1)
 text = "NEXT DEPARTURES"
 
-[node name="Board" type="VBoxContainer" parent="Margin/Rows/Top/BoardPanel/BoardBox"]
+[node name="BoardSub" type="Label" parent="Board/BoardBox"]
 unique_name_in_owner = true
 layout_mode = 2
+text = "KEBERANGKATAN BERIKUTNYA"
 
-[node name="Minutes" type="Label" parent="Margin/Rows/Top/BoardPanel/BoardBox"]
+[node name="BoardRows" type="VBoxContainer" parent="Board/BoardBox"]
 unique_name_in_owner = true
 layout_mode = 2
-size_flags_vertical = 10
-theme_override_font_sizes/font_size = 18
+theme_override_constants/separation = 4
 
-[node name="Field" type="VBoxContainer" parent="Margin/Rows/Top"]
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/separation = 8
-
-[node name="Banner" type="Label" parent="Margin/Rows/Top/Field"]
+[node name="Caption" type="Label" parent="."]
 unique_name_in_owner = true
-layout_mode = 2
-theme_override_font_sizes/font_size = 18
+layout_mode = 0
+offset_left = 680.0
+offset_top = 40.0
+offset_right = 1380.0
+offset_bottom = 80.0
 horizontal_alignment = 1
+vertical_alignment = 1
+clip_text = true
 
-[node name="Enemies" type="HBoxContainer" parent="Margin/Rows/Top/Field"]
+[node name="TopBar" type="HBoxContainer" parent="."]
 unique_name_in_owner = true
-layout_mode = 2
-size_flags_vertical = 3
-theme_override_constants/separation = 8
-alignment = 1
-
-[node name="Help" type="Label" parent="Margin/Rows/Top/Field"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 44)
-layout_mode = 2
-theme_override_colors/font_color = Color(0.85, 0.88, 0.92, 1)
-autowrap_mode = 3
-
-[node name="Prompt" type="VBoxContainer" parent="Margin/Rows/Top/Field"]
-unique_name_in_owner = true
-layout_mode = 2
-
-[node name="Log" type="RichTextLabel" parent="Margin/Rows/Top"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(300, 0)
-layout_mode = 2
-scroll_following = true
-
-[node name="Bottom" type="HBoxContainer" parent="Margin/Rows"]
-custom_minimum_size = Vector2(0, 190)
-layout_mode = 2
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -500.0
+offset_top = 36.0
+offset_right = -40.0
+offset_bottom = 80.0
+grow_horizontal = 0
 theme_override_constants/separation = 10
+alignment = 2
 
-[node name="Party" type="HBoxContainer" parent="Margin/Rows/Bottom"]
+[node name="Speed" type="Button" parent="TopBar"]
 unique_name_in_owner = true
 layout_mode = 2
-size_flags_horizontal = 3
+focus_mode = 0
+text = "F  SPEED 1×"
+
+[node name="LogButton" type="Button" parent="TopBar"]
+unique_name_in_owner = true
+layout_mode = 2
+focus_mode = 0
+text = "L  LOG"
+
+[node name="MenuButton" type="Button" parent="TopBar"]
+unique_name_in_owner = true
+layout_mode = 2
+focus_mode = 0
+text = "Esc  MENU"
+
+[node name="Stamp" type="Label" parent="."]
+unique_name_in_owner = true
+visible = false
+layout_mode = 0
+offset_left = 660.0
+offset_top = 120.0
+offset_right = 1920.0
+offset_bottom = 240.0
+pivot_offset = Vector2(630, 60)
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Chips" type="HBoxContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -1100.0
+offset_top = -124.0
+offset_right = -40.0
+offset_bottom = -24.0
+grow_horizontal = 0
+grow_vertical = 0
+mouse_filter = 2
+theme_override_constants/separation = 12
+alignment = 2
+
+[node name="CommandBox" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 0
+offset_left = 1460.0
+offset_top = 640.0
+offset_right = 1880.0
+offset_bottom = 900.0
+
+[node name="Command" type="VBoxContainer" parent="CommandBox"]
+unique_name_in_owner = true
+layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="MenuPanel" type="PanelContainer" parent="Margin/Rows/Bottom"]
-custom_minimum_size = Vector2(300, 0)
-layout_mode = 2
-
-[node name="Menu" type="VBoxContainer" parent="Margin/Rows/Bottom/MenuPanel"]
+[node name="Overlay" type="Control" parent="."]
 unique_name_in_owner = true
-layout_mode = 2
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
 
-[node name="Result" type="PanelContainer" parent="."]
+[node name="LogPanel" type="PanelContainer" parent="."]
 unique_name_in_owner = true
 visible = false
 layout_mode = 1
-anchors_preset = 8
-anchor_left = 0.5
-anchor_top = 0.5
-anchor_right = 0.5
-anchor_bottom = 0.5
-offset_left = -220.0
-offset_top = -90.0
-offset_right = 220.0
-offset_bottom = 90.0
-grow_horizontal = 2
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -560.0
+offset_top = 96.0
+offset_right = -40.0
+offset_bottom = -330.0
+grow_horizontal = 0
 grow_vertical = 2
 
-[node name="ResultBox" type="VBoxContainer" parent="Result"]
-layout_mode = 2
-alignment = 1
-
-[node name="ResultText" type="Label" parent="Result/ResultBox"]
+[node name="Log" type="RichTextLabel" parent="LogPanel"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 20
-horizontal_alignment = 1
-
-[node name="Continue" type="Button" parent="Result/ResultBox"]
-unique_name_in_owner = true
-layout_mode = 2
-text = "Continue"
+scroll_following = true
 
 [node name="Tuning" type="PanelContainer" parent="."]
 unique_name_in_owner = true
@@ -158,10 +199,10 @@ anchors_preset = 11
 anchor_left = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -332.0
-offset_top = 12.0
-offset_right = -12.0
-offset_bottom = -222.0
+offset_left = -480.0
+offset_top = 96.0
+offset_right = -40.0
+offset_bottom = -330.0
 grow_horizontal = 0
 grow_vertical = 2
 script = ExtResource("2_tuning")

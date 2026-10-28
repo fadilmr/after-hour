@@ -34,6 +34,8 @@ public sealed class Combatant
     public int? BondRank;
     public double Countdown, WeakDelayTaken;
     public ActionDef? Intent;
+    /// <summary>Who a single-target intent will hit, picked with the intent so the board can show it.</summary>
+    public Combatant? IntentTarget;
     public bool RecoverNextTurn, SkippedSinceTurn;
     public List<StatusInstance> Statuses { get; } = new();
     public Dictionary<string, int> Cooldowns { get; } = new();

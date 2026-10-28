@@ -10,6 +10,7 @@ public partial class EncounterSelect : Control
 {
     public override void _Ready()
     {
+        Theme = Ui.Theme;
         var s = Session.Instance;
 
         var mode = GetNode<OptionButton>("%Mode");

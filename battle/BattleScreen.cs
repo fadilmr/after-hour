@@ -8,30 +8,42 @@ using Godot;
 namespace AfterHour;
 
 /// <summary>
-/// The gray-box battle screen. Plays the battle's events (log lines, popups, pauses), redraws the board, enemy
-/// panels and party cards from the battle state, and turns button presses into Commands. No rules live here.
+/// The battle screen. Plays the battle's events (log lines, popups, stamps, pauses), redraws the departures board,
+/// the field (enemies with their intent and plate, the party) and the party chips from the battle state, and turns
+/// choices into Commands. Layout follows battle-ui-research.md: each piece sits on what it describes. No rules live here.
 /// </summary>
 public partial class BattleScreen : Control
 {
-	static readonly Color Sodium = new(1f, 0.6f, 0.24f), Steel = new(0.62f, 0.7f, 0.78f), Gold = new(1f, 0.82f, 0.4f),
-		Red = new(1f, 0.35f, 0.3f), Mint = new(0.45f, 0.9f, 0.6f), CardBg = new(0.1f, 0.13f, 0.21f), Faint = new(1f, 1f, 1f, 0.45f);
-
-	static readonly Element[] Elements = [Element.Physical, Element.Heat, Element.Frost, Element.Volt, Element.Resonance];
+	const float Floor = 600, EnemyLeft = 700, EnemyWidth = 680, PartyLeft = 1440, PartyWidth = 440;
 
 	readonly Queue<BattleEvent> _queue = new();
-	readonly Dictionary<Combatant, Control> _panels = new();
-	readonly SystemFont _mono = new() { FontNames = ["Consolas", "Cascadia Mono", "Courier New", "monospace"] };
+	readonly Dictionary<Combatant, Control> _views = new();       // shapes on the field, for popups and placing prompts
+	readonly Dictionary<Combatant, Control> _chipOf = new();
+	readonly Dictionary<Combatant, int> _passKeys = new();        // Shift Change partners and their number keys
 	Session _s = null!;
 	Battle _b = null!;
 	EncounterDef _encounter = null!;
 	int _startHp, _maxHp;
 	TaskCompletionSource<Command>? _pick;
 
-	VBoxContainer _board = null!, _menu = null!, _prompt = null!;
-	HBoxContainer _enemies = null!, _party = null!;
-	Label _minutes = null!, _banner = null!, _help = null!;
+	VBoxContainer _boardRows = null!, _command = null!;
+	HBoxContainer _chips = null!, _topBar = null!;
+	Control _field = null!, _overlay = null!, _board = null!;
+	PanelContainer _commandBox = null!, _logPanel = null!;
+	Label _caption = null!, _stamp = null!, _boardSub = null!;
+	Label? _descLabel;
+	HBoxContainer? _pips;
 	RichTextLabel _log = null!;
-	string _helpDefault = "";
+	Button _speed = null!;
+	TuningPanel _tuning = null!;
+	Tween? _stampTween;
+
+	Command? _hover;             // the focused option, previewed on the board and the field
+	ActionDef? _hoverAction;     // its action, for the Minutes pips even before a target is picked
+	bool _rushPreview, _skipRush, _inspect;
+	string _desc = "";
+	Action? _back, _onRetry;
+	Combatant? _cutInActor;
 
 	Tuning T => _s.Data.Tuning;
 
@@ -40,20 +52,35 @@ public partial class BattleScreen : Control
 
 	public override void _Ready()
 	{
-		Theme = new Theme { DefaultFontSize = 14 };
+		Theme = Ui.Theme;
 		_s = Session.Instance;
-		_board = GetNode<VBoxContainer>("%Board");
-		_menu = GetNode<VBoxContainer>("%Menu");
-		_prompt = GetNode<VBoxContainer>("%Prompt");
-		_enemies = GetNode<HBoxContainer>("%Enemies");
-		_party = GetNode<HBoxContainer>("%Party");
-		_minutes = GetNode<Label>("%Minutes");
-		_banner = GetNode<Label>("%Banner");
-		_help = GetNode<Label>("%Help");
+		_boardRows = GetNode<VBoxContainer>("%BoardRows");
+		_command = GetNode<VBoxContainer>("%Command");
+		_chips = GetNode<HBoxContainer>("%Chips");
+		_topBar = GetNode<HBoxContainer>("%TopBar");
+		_field = GetNode<Control>("%Field");
+		_overlay = GetNode<Control>("%Overlay");
+		_board = GetNode<Control>("%Board");
+		_commandBox = GetNode<PanelContainer>("%CommandBox");
+		_logPanel = GetNode<PanelContainer>("%LogPanel");
+		_caption = GetNode<Label>("%Caption");
+		_stamp = GetNode<Label>("%Stamp");
+		_boardSub = GetNode<Label>("%BoardSub");
 		_log = GetNode<RichTextLabel>("%Log");
-		GetNode<Button>("%Continue").Pressed += () => GetTree().ChangeSceneToFile("res://battle/select.tscn");
+		_speed = GetNode<Button>("%Speed");
 
 		_encounter = _s.Next ?? _s.Data.Encounters[0];
+		Style(GetNode<Label>("%Location"), _encounter.Name.ToUpperInvariant(), Ui.Cond, 16, Ui.Dim);
+		Style(GetNode<Label>("%BoardTitle"), null, Ui.CondBold, 28, Ui.Text);
+		Style(_boardSub, null, Ui.Cond, 15, Ui.Dim);
+		Style(_caption, "", Ui.Semi, 20, Ui.Dim);
+		Style(_stamp, "", Ui.CondBold, 96, Ui.Amber);
+		_commandBox.AddThemeStyleboxOverride("panel", Ui.Box(Ui.Panel, Ui.Amber, 2, 12, 14, 14));
+		_speed.Pressed += CycleSpeed;
+		GetNode<Button>("%LogButton").Pressed += () => _logPanel.Visible = !_logPanel.Visible;
+		GetNode<Button>("%MenuButton").Pressed += GoToSelect;
+		ShowSpeed();
+
 		_b = new Battle(_s.Data, _s.Setup(), _encounter, _s.Mode, _s.Items, _s.Known, Random.Shared.Next());
 		_b.Emitted += _queue.Enqueue;
 		_maxHp = _b.Party.Sum(p => p.Body.MaxHp);
@@ -63,16 +90,59 @@ public partial class BattleScreen : Control
 		RunLoop();
 	}
 
-	TuningPanel _tuning = null!;
-
-	public override void _UnhandledInput(InputEvent e)
+	static void Style(Label label, string? text, Font font, int size, Color color)
 	{
-		if (e is InputEventKey { Pressed: true, Echo: false, Keycode: Key.F1 })
+		if (text != null) label.Text = text;
+		label.AddThemeFontOverride("font", font);
+		label.AddThemeFontSizeOverride("font_size", size);
+		label.AddThemeColorOverride("font_color", color);
+	}
+
+	/// <summary>Keys: Z choose, X back, Q Overtime, Tab inspect, F speed, L log, Esc menu, 1–3 Shift Change, R retry, F1 tuning.</summary>
+	public override void _Input(InputEvent ev)
+	{
+		if (ev is not InputEventKey { Pressed: true, Echo: false } k || _s.Autoplay) return;
+		if (k.Keycode == Key.F1)
 		{
 			_tuning.Toggle();
 			GetViewport().SetInputAsHandled();
+			return;
 		}
+		if (GetViewport().GuiGetFocusOwner() is LineEdit) return;   // typing in the tuning panel
+		bool handled = true;
+		switch (k.Keycode)
+		{
+			case Key.Z:
+				if (GetViewport().GuiGetFocusOwner() is BaseButton { Disabled: false } focused) focused.EmitSignal(BaseButton.SignalName.Pressed);
+				break;
+			case Key.X or Key.Backspace when _back != null: _back(); break;
+			case Key.Q: TryOvertime(); break;
+			case Key.Tab:
+				_inspect = !_inspect;
+				DrawField();
+				ShowDesc();
+				break;
+			case Key.F: CycleSpeed(); break;
+			case Key.L: _logPanel.Visible = !_logPanel.Visible; break;
+			case Key.Escape: GoToSelect(); break;
+			case Key.R when _onRetry != null: _onRetry(); break;
+			case >= Key.Key1 and <= Key.Key9 when _passKeys.FirstOrDefault(p => p.Value == k.Keycode - Key.Key0).Key is { } partner:
+				Choose(new Command(CommandKind.ShiftChange, partner));
+				break;
+			default: handled = false; break;
+		}
+		if (handled) GetViewport().SetInputAsHandled();
 	}
+
+	void CycleSpeed()
+	{
+		_s.AnimSpeed = _s.AnimSpeed > 0.75 ? 0.5 : _s.AnimSpeed > 0.375 ? 0.25 : 1;
+		ShowSpeed();
+	}
+
+	void ShowSpeed() => _speed.Text = $"F  SPEED {(_s.AnimSpeed > 0 ? 1 / _s.AnimSpeed : 1):0}×";
+
+	void GoToSelect() => GetTree().ChangeSceneToFile("res://battle/select.tscn");
 
 	/// <summary>
 	/// One turn at a time: play what happened, redraw, then either run the next turn or ask for a decision.
@@ -123,28 +193,37 @@ public partial class BattleScreen : Control
 		while (_queue.TryDequeue(out var e))
 		{
 			if (e.Text != "") _log.AppendText((e.Kind == EventKind.TurnStart ? "\n" : "") + e.Text + "\n");
-			if (e.Kind == EventKind.TurnStart) MarkActor(e.Target);
 			switch (e.Kind)
 			{
-				case EventKind.Action or EventKind.CutIn or EventKind.ShiftChange or EventKind.Rush or EventKind.TurnStart:
-					_banner.Text = e.Text;
+				case EventKind.TurnStart:
+					_caption.Text = e.Text;
+					DrawChips();
+					await Pause(0.15);
+					break;
+				case EventKind.Action:
+					_caption.Text = e.Text;
 					await Pause(0.35);
 					break;
+				case EventKind.CutIn or EventKind.ShiftChange or EventKind.Rush:
+					_caption.Text = e.Text;
+					Stamp(e.Kind switch { EventKind.CutIn => "CUT IN", EventKind.Rush => "RUSH!", _ => "SHIFT CHANGE" });
+					await Pause(0.5);
+					break;
 				case EventKind.Damage when e.Amount > 0:
-					Popup(e.Target, $"{e.Amount}", e.Target?.IsParty == true ? Red : Colors.White);
+					Popup(e.Target, $"{e.Amount}", e.Target?.IsParty == true ? Ui.Danger : Ui.Text);
 					Flash(e.Target);
 					break;
 				case EventKind.Heal when e.Amount > 0:
-					Popup(e.Target, $"+{e.Amount}", Mint);
+					Popup(e.Target, $"+{e.Amount}", Ui.Mint);
 					break;
 				case EventKind.Weakness:
-					Popup(e.Target, "WEAK!", Gold);
+					Popup(e.Target, "WEAK!", Ui.Amber);
 					break;
 				case EventKind.StaggerBreak:
-					Popup(e.Target, "STAGGER!", Sodium);
+					Popup(e.Target, "STAGGERED!", Ui.Amber);
 					break;
 				case EventKind.KO:
-					Popup(e.Target, "DOWN", Red);
+					Popup(e.Target, "DOWN", Ui.Danger);
 					break;
 			}
 		}
@@ -160,176 +239,351 @@ public partial class BattleScreen : Control
 	public void Refresh()
 	{
 		ShowBoard();
-		_minutes.Text = "MINUTES  " + new string('●', _b.Minutes) + new string('○', Math.Max(0, T.MaxMinutes - _b.Minutes));
-		_panels.Clear();
-		Fill(_enemies, _b.Enemies.Where(e => e.Alive).Select(EnemyPanel).ToList());
-		Fill(_party, _b.Party.Select(PartyCard).ToList());
+		DrawField();
+		DrawChips();
+		DrawPips();
 	}
 
-	// ---------- the departure board ----------
-
-	void ShowBoard(Command? hypothetical = null)
+	/// <summary>The focused option changed: show its outcome on the board, the field and the Minutes pips.</summary>
+	void UpdatePreview()
 	{
+		ShowBoard();
+		DrawField();
+		DrawPips();
+	}
+
+	// ---------- the departures board ----------
+
+	void ShowBoard()
+	{
+		var hyp = _hover is { Kind: CommandKind.Act or CommandKind.CutIn } ? _hover : null;
 		var times = new List<double>();
-		var order = _b.Preview(8, hypothetical, times);
-		var highlight = new List<Combatant>();
-		if (hypothetical?.Unit is { } unit) highlight.Add(unit);
-		if (hypothetical?.Target is { } target) highlight.Add(target);
+		var order = _b.Preview(8, hyp, times);
+		var before = new Dictionary<Combatant, double>();
+		if (hyp != null)
+		{
+			var baseTimes = new List<double>();
+			var baseOrder = _b.Preview(8, null, baseTimes);
+			for (int i = 0; i < baseOrder.Count; i++) before.TryAdd(baseOrder[i], baseTimes[i]);
+		}
+		var marked = hyp != null ? PreviewTargets(hyp).ToHashSet() : new HashSet<Combatant>();
+		_boardSub.Text = hyp != null ? $"AFTER {hyp.Action!.Name.ToUpperInvariant()}" : "KEBERANGKATAN BERIKUTNYA";
+		_boardSub.AddThemeColorOverride("font_color", hyp != null ? Ui.Text : Ui.Dim);
 
 		var seen = new HashSet<Combatant>();
-		Fill(_board, order.Select((u, i) =>
+		Fill(_boardRows, order.Select((u, i) =>
 		{
-			var tag = u.IsParty ? "" : seen.Add(u) ? IntentTag(u) : "·";
-			var name = u.Def.Name.Length > 15 ? u.Def.Name[..15] : u.Def.Name;
-			var row = Text($"{i + 1}  {name,-15} {times[i],4:0}  {tag}", highlight.Contains(u) ? Gold : u.IsParty ? Sodium : Steel);
-			row.AddThemeFontOverride("font", _mono);
-			return (Control)row;
+			bool now = i == 0 && (times[0] < 0.5 || (hyp == null && u == _b.Actor));   // the cut-in window: no time has passed yet
+			string tag = "";
+			var tagColor = Ui.Dim;
+			if (seen.Add(u))
+			{
+				if (hyp != null && u != hyp.Unit && before.TryGetValue(u, out var was))
+				{
+					var d = times[i] - was;
+					if (d > 0.5) (tag, tagColor) = ($"DELAYED +{Ui.Clock(d)}", Ui.Sky);
+					else if (d < -0.5) (tag, tagColor) = ($"EARLY −{Ui.Clock(-d)}", Ui.Mint);
+				}
+				if (tag == "" && !u.IsParty)
+				{
+					if (u.Intent?.Intent == Intent.Recover) tag = "CANCELLED";
+					else if (Countdown(u) is { } c) (tag, tagColor) = (c, Ui.Danger);
+				}
+			}
+			return BoardRow(now ? "NOW" : Ui.Clock(times[i]), u, tag, tagColor, now, marked.Contains(u));
 		}).ToList());
 	}
 
-	static string IntentTag(Combatant u) => u.Intent?.Intent switch
+	static Control BoardRow(string time, Combatant u, string tag, Color tagColor, bool now, bool marked)
 	{
-		Intent.Attack => "ATK",
-		Intent.Heavy => "HVY",
-		Intent.Debuff => "DBF",
-		Intent.Summon => "SUM",
-		Intent.Charge => $"CHG {u.Body.Counter}",
-		Intent.Stall => "STL",
-		Intent.Recover => "REC",
-		_ => "",
-	};
-
-	// ---------- panels ----------
-
-	Control EnemyPanel(Combatant e)
-	{
-		var box = new VBoxContainer();
-		box.AddChild(Text(e.Def.Name, Steel));
-		box.AddChild(Bar(e.Body.Hp, e.Body.MaxHp, Red));
-		box.AddChild(Text($"HP {e.Body.Hp}/{e.Body.MaxHp}"));
-		if (e.Body.MaxStagger > 0)
-			box.AddChild(e.Body.Staggered ? Text("STAGGERED", Sodium) : Bar(e.Body.Stagger, e.Body.MaxStagger, Gold));
-		var affinities = new HFlowContainer();
-		foreach (var el in Elements)
-		{
-			var a = Affinity(e, el);
-			affinities.AddChild(Text($"{Short(el)} {a} ", a == "WK" ? Gold : a == "?" ? Faint : Steel));
-		}
-		box.AddChild(affinities);
-		box.AddChild(Text($"Next: {e.Intent?.Name ?? "—"}"));
-		if (e.Intent != null)
-		{
-			var what = Text(Describe.Action(e.Intent, _s.Data, enemy: true), Faint);
-			what.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-			what.AddThemeFontSizeOverride("font_size", 12);
-			box.AddChild(what);
-		}
-		if (Countdown(e) is { } c) box.AddChild(Text(c, Gold));
-		if (e.Statuses.Count > 0) box.AddChild(Text(StatusText(e)));
-		return Card(box, e, 140);
+		var color = u.IsParty ? Ui.Member(u.Def.Id) : Ui.Text;
+		var timeLabel = Ui.L(time, now ? Ui.MonoBold : Ui.Mono, 18, now ? Ui.Ground : Ui.Text);
+		timeLabel.CustomMinimumSize = new Vector2(58, 0);
+		var dot = Dot(now ? Ui.Ground : u.IsParty ? color : Ui.Danger, 10, u.IsParty ? 5 : 2);
+		var name = Ui.L(u.Def.Name.ToUpperInvariant(), Ui.CondBold, 21, now ? Ui.Ground : color);
+		name.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+		name.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
+		name.ClipText = true;
+		var row = Ui.H(10, timeLabel, dot, name);
+		if (tag != "") row.AddChild(Ui.L(tag, Ui.CondBold, 15, now ? Ui.Ground : tagColor));
+		var panel = Ui.Wrap(row, Ui.Box(now ? Ui.Amber : Ui.Row, marked ? Ui.Text : null, 2, 8, 12, 0));
+		panel.CustomMinimumSize = new Vector2(0, 42);
+		return panel;
 	}
 
-	Control PartyCard(Combatant m)
+	static Panel Dot(Color color, int size, int radius)
 	{
-		var box = new VBoxContainer();
-		box.AddChild(Text(m.Alive ? m.Def.Name : $"{m.Def.Name} (down)", Sodium));
-		box.AddChild(Bar(m.Body.Hp, m.Body.MaxHp, Mint));
-		box.AddChild(Text($"HP {m.Body.Hp}/{m.Body.MaxHp}" + (m.Shield > 0 ? $"   shield {m.Shield}" : "")));
-		box.AddChild(Bar(m.Overtime, T.OtMax, Sodium));
-		box.AddChild(Text($"OVERTIME {m.Overtime}/{T.OtMax}" + (m.BondRank is { } r ? $"   bond {r}" : "")));
-		if (CanCutIn(m))
-		{
-			var ot = _s.Data.ActionById(m.Def.Overtime!);
-			var cut = new Button { Text = $"CUT IN: {ot.Name}" };
-			cut.Pressed += () => OnCutIn(m);
-			Hover(cut, null, $"{ot.Name}: {Describe.Action(ot, _s.Data)}");
-			box.AddChild(cut);
-		}
-		if (m.Statuses.Count > 0) box.AddChild(Text(StatusText(m)));
-		foreach (var p in m.Def.Passives ?? [])
-		{
-			var passive = Text(Describe.Passive(p, T), Faint);
-			passive.AutowrapMode = TextServer.AutowrapMode.WordSmart;
-			passive.AddThemeFontSizeOverride("font_size", 12);
-			box.AddChild(passive);
-		}
-		var card = Card(box, m, 200);
-		if (!m.Alive) card.Modulate = Faint;
-		return card;
+		var dot = new Panel { CustomMinimumSize = new Vector2(size, size), SizeFlagsVertical = SizeFlags.ShrinkCenter, MouseFilter = MouseFilterEnum.Ignore };
+		dot.AddThemeStyleboxOverride("panel", Ui.Box(color, radius: radius));
+		return dot;
 	}
-
-	/// <summary>Only while the battle is actually waiting on the player, never during a turn's playback.</summary>
-	bool CanCutIn(Combatant m) => !_s.Autoplay && m.Alive && m.Def.Overtime != null && m.Overtime >= T.OtMax
-		&& _b.AwaitingInput && _b.Phase is BattlePhase.ChooseAction or BattlePhase.TurnStart;
-
-	string Affinity(Combatant e, Element el)
-	{
-		if (!_s.RevealAll && !_b.Known.Contains(Battle.KnownKey(e, el))) return "?";
-		return e.Def.Weak?.Contains(el) == true ? "WK" : e.Def.Resist?.Contains(el) == true ? "RS" : "–";
-	}
-
-	static string Short(Element el) => el switch { Element.Physical => "Phy", Element.Resonance => "Res", _ => el.ToString() };
 
 	static string? Countdown(Combatant e) => e.Def.Behavior switch
 	{
-		"deadline" => e.Body.Counter > 0 ? $"Final Notice in {e.Body.Counter}" : "FINAL NOTICE NEXT",
-		"double_shift" when e.Body.ClauseActive => $"Shift ends in {e.Body.Counter}",
+		"deadline" => e.Body.Counter > 0 ? $"NOTICE IN {e.Body.Counter}" : "FINAL NOTICE",
+		"double_shift" when e.Body.ClauseActive => $"SHIFT ENDS {e.Body.Counter}",
 		_ => null,
 	};
+
+	// ---------- the field ----------
+
+	/// <summary>What the focused option would do to one enemy: the forecast, never the dice.</summary>
+	readonly record struct Outcome(double Damage, int HpAfter, int StaggerAfter, string Tags);
+
+	void DrawField()
+	{
+		Fill(_field, []);
+		_views.Clear();
+		var outcomes = Forecast();
+		var hypTargets = _hover != null ? PreviewTargets(_hover).ToHashSet() : new HashSet<Combatant>();
+
+		var enemies = _b.Enemies.Where(e => e.Alive).ToList();
+		float slot = EnemyWidth / Math.Max(1, enemies.Count);
+		for (int i = 0; i < enemies.Count; i++)
+			EnemyView(enemies[i], EnemyLeft + slot * (i + 0.5f), slot, outcomes.TryGetValue(enemies[i], out var o) ? o : null, hypTargets.Contains(enemies[i]));
+
+		float pslot = PartyWidth / Math.Max(1, _b.Party.Count);
+		for (int i = 0; i < _b.Party.Count; i++)
+			PartySprite(_b.Party[i], PartyLeft + pslot * (i + 0.5f), hypTargets.Contains(_b.Party[i]));
+	}
+
+	Dictionary<Combatant, Outcome> Forecast()
+	{
+		var result = new Dictionary<Combatant, Outcome>();
+		if (_rushPreview)
+		{
+			foreach (var e in _b.Enemies.Where(x => x.Alive))
+			{
+				var total = _b.Party.Where(p => p.Alive)
+					.Sum(p => Damage.Expected(T, p, e, _s.Data.ActionById(p.Def.Actions![0]), 0, rush: true));
+				result[e] = new Outcome(total, Math.Max(0, (int)Math.Round(e.Body.Hp - total)), e.Body.Stagger, "");
+			}
+			return result;
+		}
+		if (_hover is not { Kind: CommandKind.Act or CommandKind.CutIn, Unit: { } u, Action: { Power: > 0 } a }) return result;
+		foreach (var t in PreviewTargets(_hover).Where(t => !t.IsParty && t.Alive))
+		{
+			double per = Damage.Expected(T, u, t, a, _b.ChainPasses);
+			bool known = _s.RevealAll || _b.Known.Contains(Battle.KnownKey(t, a.Element));
+			bool weak = a.Element != Element.None && t.Def.Weak?.Contains(a.Element) == true;
+			bool resist = a.Element != Element.None && t.Def.Resist?.Contains(a.Element) == true;
+			if (weak && !known) per /= T.WeakMult;       // don't give away an untested weakness
+			if (resist && !known) per /= T.ResistMult;
+			var tags = new List<string>();
+			if (weak && known) tags.Add($"WEAK ×{T.WeakMult:0.##}");
+			if (resist && known) tags.Add($"RESIST ×{T.ResistMult:0.##}");
+			if (!known && a.Element != Element.None) tags.Add($"{a.Element.ToString().ToUpperInvariant()} ?");
+			if (t.Body.Staggered) tags.Add($"STAGGERED ×{T.StaggeredMult:0.##}");
+			double total = per * a.Hits;
+			int staggerAfter = weak && known && !t.Body.Staggered && t.Body.MaxStagger > 0
+				? Math.Max(0, t.Body.Stagger - a.Stagger * a.Hits) : t.Body.Stagger;
+			result[t] = new Outcome(total, Math.Max(0, (int)Math.Round(t.Body.Hp - total)), staggerAfter, string.Join(" · ", tags));
+		}
+		return result;
+	}
+
+	List<Combatant> PreviewTargets(Command c) => c.Action?.Target switch
+	{
+		TargetType.Enemy or TargetType.Ally => c.Target is { } t ? [t] : [],
+		TargetType.AllEnemies => _b.Enemies.Where(e => e.Alive).ToList(),
+		TargetType.AllAllies => _b.Party.Where(p => p.Alive).ToList(),
+		TargetType.Self => c.Unit is { } u ? [u] : [],
+		_ => [],
+	};
+
+	static (Vector2 Size, bool Round) ShapeOf(CombatantDef d) => d.Id switch
+	{
+		"rush_hour" => (new(200, 120), false),
+		"hold_music" => (new(150, 150), true),
+		"deadline" => (new(140, 200), false),
+		"endless_meeting" => (new(230, 140), false),
+		"insomnia" => (new(130, 190), true),
+		"agenda_item" => (new(90, 90), false),
+		_ => (new(190, 260), false),
+	};
+
+	void EnemyView(Combatant e, float cx, float slot, Outcome? o, bool targeted)
+	{
+		var (size, round) = ShapeOf(e.Def);
+		size *= Math.Min(1f, (slot - 24) / size.X);
+		bool acting = e == _cutInActor;
+		var shape = new Panel { Position = new Vector2(cx - size.X / 2, Floor - size.Y), Size = size, MouseFilter = MouseFilterEnum.Ignore };
+		shape.AddThemeStyleboxOverride("panel", Ui.Box(Ui.Shape, targeted ? Ui.Amber : acting ? Ui.Danger : Ui.Muted, targeted || acting ? 3 : 2,
+			round ? (int)(Math.Min(size.X, size.Y) / 2) : 12));
+		_field.AddChild(shape);
+		_views[e] = shape;
+
+		float top = shape.Position.Y - 10;
+		if (IntentText(e) is { Length: > 0 } intent)
+		{
+			var chip = Place(_field, Ui.Chip(intent, e.Intent!.Intent == Intent.Recover ? Ui.Dim : Ui.Danger, size: 16), cx, top, above: true);
+			top = chip.Position.Y - 8;
+		}
+		if (o is { } f && !_rushPreview)
+		{
+			var card = Ui.V(2, Ui.L($"≈{Math.Round(f.Damage)}", Ui.MonoBold, 30, Ui.Amber));
+			if (f.Tags != "") card.AddChild(Ui.L(f.Tags, Ui.CondBold, 16));
+			if (f.StaggerAfter == 0 && e.Body.Stagger > 0) card.AddChild(Ui.L("BREAKS STAGGER", Ui.CondBold, 16, Ui.Amber));
+			if (_inspect && _hover?.Action is { } a) card.AddChild(Ui.L($"Power {a.Power:0.0#} · Stagger {a.Stagger}", Ui.Mono, 14, Ui.Dim));
+			Place(_field, Ui.Wrap(card, Ui.Box(Ui.Raised, Ui.Amber, 2, 10, 12, 8)), cx, top, above: true);
+		}
+		Place(_field, Plate(e, Math.Clamp(slot - 16, 170, 240), o, targeted), cx, Floor + 16, above: false);
+	}
+
+	/// <summary>One glyph-like word and a number, over the enemy: "ATK ×3 → ROOK", "NOTICE IN 2".</summary>
+	static string IntentText(Combatant e)
+	{
+		if (e.Intent is not { } a) return "";
+		if (a.Intent == Intent.Recover) return "REELING";
+		if (e.Def.Behavior == "deadline" && a.Intent == Intent.Charge) return $"NOTICE IN {e.Body.Counter}";
+		var kind = a.Intent switch
+		{
+			Intent.Attack => "ATK",
+			Intent.Heavy => "HEAVY",
+			Intent.Debuff => "DEBUFF",
+			Intent.Summon => "SUMMON",
+			Intent.Charge => "CHARGE",
+			Intent.Stall => "STALL",
+			_ => "",
+		};
+		if (a.Power > 0 && a.Hits > 1) kind += $" ×{a.Hits}";
+		if (a.Target == TargetType.AllEnemies) kind += " → ALL";
+		else if (e.IntentTarget is { IsParty: true } t) kind += $" → {t.Def.Name.ToUpperInvariant()}";
+		return kind;
+	}
+
+	Control Plate(Combatant e, float width, Outcome? o, bool targeted)
+	{
+		var hp = o is { } f ? $"{e.Body.Hp} → {(f.HpAfter == 0 ? "KO" : f.HpAfter)}" : $"{e.Body.Hp}";
+		var name = Ui.L(e.Def.Name.ToUpperInvariant(), Ui.CondBold, 18);
+		name.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+		name.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
+		name.ClipText = true;
+		var box = Ui.V(6, Ui.H(8, name, Ui.L(hp, Ui.MonoBold, 16, o != null ? Ui.Amber : Ui.Dim)),
+			Ui.Bar(e.Body.Hp / (double)Math.Max(1, e.Body.MaxHp), Ui.HpFill, 6));
+		if (e.Body.MaxStagger > 0) box.AddChild(e.Body.Staggered ? Ui.Chip("STAGGERED", Ui.Text) : Pips(e, o));
+
+		var chips = new HFlowContainer { MouseFilter = MouseFilterEnum.Ignore };
+		chips.AddThemeConstantOverride("h_separation", 6);
+		chips.AddThemeConstantOverride("v_separation", 4);
+		foreach (var el in e.Def.Weak ?? [])
+			chips.AddChild(Known(e, el) ? Ui.Chip(el.ToString().ToUpperInvariant(), Ui.Of(el)) : Ui.Chip("?", Ui.Muted));
+		if (_inspect)
+			foreach (var el in (e.Def.Resist ?? []).Where(el => Known(e, el)))
+				chips.AddChild(Ui.Chip($"RS {el.ToString().ToUpperInvariant()}", Ui.Dim));
+		if (chips.GetChildCount() > 0) box.AddChild(chips);
+		if (e.Statuses.Count > 0) box.AddChild(Ui.L(StatusText(e).ToUpperInvariant(), Ui.Cond, 15, Ui.Dim));
+		if (_inspect && e.Intent != null)
+		{
+			var what = Ui.L($"{e.Intent.Name}: {Describe.Action(e.Intent, _s.Data, enemy: true)}", Ui.Body, 14, Ui.Dim);
+			what.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+			what.CustomMinimumSize = new Vector2(width - 24, 0);
+			box.AddChild(what);
+		}
+		var plate = Ui.Wrap(box, Ui.Box(Ui.Panel, targeted ? Ui.Amber : Ui.Line, targeted ? 2 : 1, 10, 12, 10));
+		plate.CustomMinimumSize = new Vector2(width, 0);
+		return plate;
+	}
+
+	bool Known(Combatant e, Element el) => _s.RevealAll || _b.Known.Contains(Battle.KnownKey(e, el));
+
+	/// <summary>Stagger as pips; a forecast shows the pips it would knock off in amber.</summary>
+	static Control Pips(Combatant e, Outcome? o)
+	{
+		int n = Math.Clamp(e.Body.MaxStagger / 5, 1, 10);
+		double per = e.Body.MaxStagger / (double)n;
+		int now = (int)Math.Ceiling(e.Body.Stagger / per - 1e-9);
+		int after = o is { } f ? (int)Math.Ceiling(f.StaggerAfter / per - 1e-9) : now;
+		var row = Ui.H(3);
+		for (int i = 0; i < n; i++)
+		{
+			var pip = new Panel { CustomMinimumSize = new Vector2(0, 8), SizeFlagsHorizontal = SizeFlags.ExpandFill, MouseFilter = MouseFilterEnum.Ignore };
+			pip.AddThemeStyleboxOverride("panel", Ui.Box(i < after ? Ui.Dim : i < now ? Ui.Amber : Ui.Line, radius: 2));
+			row.AddChild(pip);
+		}
+		return row;
+	}
+
+	void PartySprite(Combatant m, float cx, bool targeted)
+	{
+		var color = Ui.Member(m.Def.Id);
+		var holder = new Control { MouseFilter = MouseFilterEnum.Ignore, Modulate = m.Alive ? Colors.White : Ui.Faint };
+		_field.AddChild(holder);
+		var body = new Panel { Position = new Vector2(cx - 48, Floor - 150), Size = new Vector2(96, 150), MouseFilter = MouseFilterEnum.Ignore };
+		var bodyStyle = Ui.Box(new Color("#141C33"), targeted ? Ui.Amber : color, 3, 12);
+		bodyStyle.CornerRadiusTopLeft = bodyStyle.CornerRadiusTopRight = 40;
+		body.AddThemeStyleboxOverride("panel", bodyStyle);
+		var head = new Panel { Position = new Vector2(cx - 28, Floor - 150 - 64), Size = new Vector2(56, 56), MouseFilter = MouseFilterEnum.Ignore };
+		head.AddThemeStyleboxOverride("panel", Ui.Box(new Color("#141C33"), targeted ? Ui.Amber : color, 3, 28));
+		holder.AddChild(body);
+		holder.AddChild(head);
+		Place(holder, Ui.L(m.Def.Name.ToUpperInvariant(), Ui.CondBold, 20, color), cx, head.Position.Y - 6, above: true);
+		_views[m] = body;
+	}
+
+	/// <summary>Adds c to parent, sized to its content, centered on cx, its top (or bottom, when above) at y.</summary>
+	static T Place<T>(Control parent, T c, float cx, float y, bool above) where T : Control
+	{
+		parent.AddChild(c);
+		var size = c.GetCombinedMinimumSize();
+		c.Size = size;
+		c.Position = new Vector2(cx - size.X / 2, above ? y - size.Y : y);
+		return c;
+	}
 
 	static string StatusText(Combatant u) =>
 		string.Join(" · ", u.Statuses.Select(s => s.Id is StatusId.Guard or StatusId.Echo ? $"{s.Id}" : $"{s.Id} {s.TurnsLeft}"));
 
-	PanelContainer Card(Control content, Combatant u, float width)
+	// ---------- party chips ----------
+
+	void DrawChips()
 	{
-		var style = new StyleBoxFlat { BgColor = CardBg };
-		style.SetCornerRadiusAll(6);
-		style.SetContentMarginAll(8);
-		var card = new PanelContainer { CustomMinimumSize = new Vector2(width, 0), SizeFlagsHorizontal = SizeFlags.ExpandFill };
-		card.AddThemeStyleboxOverride("panel", style);
-		card.AddChild(content);
-		_panels[u] = card;
-		Outline(style, _b.Actor == u);
-		return card;
+		_chipOf.Clear();
+		Fill(_chips, _b.Party.Select(Chip).ToList());
 	}
 
-	/// <summary>Moves the gold "acting" border as soon as a turn starts, before the redraw.</summary>
-	void MarkActor(Combatant? actor)
+	/// <summary>Portrait with the Overtime ring (Q at 100), HP bar, statuses. The active chip is larger, with the only amber border.</summary>
+	Control Chip(Combatant m)
 	{
-		foreach (var (u, panel) in _panels)
-			if (IsInstanceValid(panel) && panel.GetThemeStylebox("panel") is StyleBoxFlat style) Outline(style, u == actor);
-	}
-
-	static void Outline(StyleBoxFlat style, bool acting)
-	{
-		style.BorderColor = acting ? Gold : new Color(1, 1, 1, 0.12f);
-		style.SetBorderWidthAll(acting ? 3 : 1);
-	}
-
-	static ProgressBar Bar(int value, int max, Color fill)
-	{
-		var bar = new ProgressBar { MaxValue = Math.Max(1, max), Value = value, ShowPercentage = false, CustomMinimumSize = new Vector2(0, 8) };
-		bar.AddThemeStyleboxOverride("fill", new StyleBoxFlat { BgColor = fill });
-		bar.AddThemeStyleboxOverride("background", new StyleBoxFlat { BgColor = new Color(1, 1, 1, 0.1f) });
-		return bar;
-	}
-
-	static Label Text(string text, Color? color = null)
-	{
-		var label = new Label { Text = text };
-		if (color is { } c) label.AddThemeColorOverride("font_color", c);
-		return label;
-	}
-
-	static void Fill(Container box, IEnumerable<Control> items)
-	{
-		foreach (var child in box.GetChildren())
+		bool active = _b.Actor == m && m.Alive;
+		var color = Ui.Member(m.Def.Id);
+		double ot = Math.Min(1, m.Overtime / (double)T.OtMax);
+		var ring = new Control { CustomMinimumSize = new Vector2(68, 68), SizeFlagsVertical = SizeFlags.ShrinkCenter, MouseFilter = MouseFilterEnum.Ignore };
+		ring.Draw += () =>
 		{
-			box.RemoveChild(child);
-			child.QueueFree();
-		}
-		foreach (var item in items) box.AddChild(item);
+			var c = new Vector2(34, 34);
+			ring.DrawCircle(c, 26, Ui.Raised);
+			ring.DrawArc(c, 30, 0, Mathf.Tau, 64, Ui.Line, 5, true);
+			if (ot > 0) ring.DrawArc(c, 30, -Mathf.Pi / 2, -Mathf.Pi / 2 + Mathf.Tau * (float)ot, 64, color, 5, true);
+			Centered(ring, Ui.CondBold, m.Def.Name[..1], c, 30, color);
+			if (ot >= 1 && m.Def.Overtime != null)
+			{
+				ring.DrawCircle(new Vector2(56, 56), 12, Ui.Amber);
+				Centered(ring, Ui.MonoBold, "Q", new Vector2(56, 56), 16, Ui.Ground);
+			}
+		};
+		var top = Ui.H(8, Ui.L(m.Def.Name.ToUpperInvariant(), Ui.CondBold, 22, color), Ui.Spacer(), Ui.L($"{m.Body.Hp}", Ui.MonoBold, 18));
+		if (m.Shield > 0) top.AddChild(Ui.L($"+{m.Shield}", Ui.MonoBold, 16, Ui.Mint));
+		var col = Ui.V(6, top, Ui.Bar(m.Body.Hp / (double)Math.Max(1, m.Body.MaxHp), Ui.HpFill, 8));
+		col.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+		col.SizeFlagsVertical = SizeFlags.ShrinkCenter;
+		if (m.Statuses.Count > 0) col.AddChild(Ui.L(StatusText(m).ToUpperInvariant(), Ui.Cond, 15, Ui.Dim));
+		if (_passKeys.TryGetValue(m, out var key)) col.AddChild(Ui.Chip($"{key}  ACT NOW +{ChainBonus()}", Ui.Amber, Ui.Amber));
+		var chip = Ui.Wrap(Ui.H(12, ring, col), Ui.Box(Ui.Panel, active ? Ui.Amber : Ui.Line, active ? 2 : 1, 12, 14, active ? 14 : 8));
+		chip.CustomMinimumSize = new Vector2(active ? 290 : 250, 0);
+		chip.SizeFlagsVertical = SizeFlags.ShrinkEnd;
+		if (!m.Alive) chip.Modulate = Ui.Faint;
+		_chipOf[m] = chip;
+		return chip;
 	}
+
+	static void Centered(Control c, Font font, string text, Vector2 center, int size, Color color)
+	{
+		float baseline = center.Y + (font.GetAscent(size) - font.GetDescent(size)) / 2;
+		c.DrawString(font, new Vector2(center.X - 40, baseline), text, HorizontalAlignment.Center, 80, size, color);
+	}
+
+	string ChainBonus() => Describe.Pct(T.ChainBonus * Math.Min(_b.ChainPasses + 1, T.ChainMaxPasses));
 
 	// ---------- choices ----------
 
@@ -352,9 +606,18 @@ public partial class BattleScreen : Control
 
 	void Choose(Command c)
 	{
-		Fill(_menu, []);
-		Fill(_prompt, []);
-		_help.Text = _helpDefault = "";
+		Fill(_command, []);
+		_commandBox.Visible = false;
+		Fill(_overlay, []);
+		SetHud(true);
+		_hover = null;
+		_hoverAction = null;
+		_rushPreview = _skipRush = false;
+		_passKeys.Clear();
+		_back = null;
+		_cutInActor = null;
+		_descLabel = null;
+		_pips = null;
 		_pick?.TrySetResult(c);
 	}
 
@@ -363,165 +626,362 @@ public partial class BattleScreen : Control
 		var u = _b.Actor!;
 		var moves = u.Def.Actions!.Select(_s.Data.ActionById).ToList();
 		var basic = moves[0];
-		_help.Text = _helpDefault = "";
-		SetMenu($"{u.Def.Name}'s turn",
-			Option(u, basic, $"Attack: {basic.Name}  {Cost(basic)}"),
-			Link("Skills ▸", () => ShowList(u, "Skills", moves.Skip(1))),
-			Option(u, _s.Data.ActionById(_s.Data.Brace), "Brace  (+1 Min, guard)"),
-			Link("Items ▸", () => ShowList(u, "Items", _s.Data.Items.Select(i => _s.Data.ActionById(i.Action)))));
+		var skills = moves.Skip(1).ToList();
+		var items = _s.Data.Items.Select(i => _s.Data.ActionById(i.Action)).ToList();
+		int ready = skills.Count(a => _b.CanUse(u, a, out _));
+		SetMenu($"{u.Def.Name.ToUpperInvariant()} · YOUR MOVE",
+		[
+			ActRow(u, basic, "Attack", $"{basic.Name} · {basic.Element}"),
+			Row("Skills", $"{ready} ready", "", "›", () => ShowList(u, "SKILLS", skills), desc: "Skills cost Minutes from the shared pool."),
+			ActRow(u, _s.Data.ActionById(_s.Data.Brace), "Brace", "Guard until your next turn"),
+			Row("Items", $"{_s.Items.Values.Sum()} in your bag", "", "›", () => ShowList(u, "ITEMS", items), desc: "Items are shared by the party."),
+		], back: null);
 	}
 
 	void ShowList(Combatant u, string title, IEnumerable<ActionDef> actions) =>
-		SetMenu(title, actions.Select(a => (Control)Option(u, a, $"{a.Name}  {Cost(a)}")).Append(Link("◂ Back", ShowMainMenu)).ToArray());
+		SetMenu($"› {title}", actions.Select(a => ActRow(u, a)).ToList(), back: ShowMainMenu);
 
-	string Cost(ActionDef a)
-	{
-		var parts = new List<string>();
-		if (a.MinuteCost > 0) parts.Add($"{a.MinuteCost} Min");
-		if (a.MinuteGain > 0) parts.Add($"+{a.MinuteGain} Min");
-		if (a.HpCost > 0) parts.Add($"{Describe.Pct(a.HpCost)} HP");
-		if (_s.Items.TryGetValue(a.Id, out var n)) parts.Add($"×{n}");
-		return parts.Count > 0 ? $"({string.Join(", ", parts)})" : "";
-	}
-
-	Button Option(Combatant u, ActionDef a, string label)
+	Button ActRow(Combatant u, ActionDef a, string? name = null, string? sub = null)
 	{
 		var ok = _b.CanUse(u, a, out var why);
-		var button = new Button { Text = label, Disabled = !ok, TooltipText = why, Alignment = HorizontalAlignment.Left };
-		button.Pressed += () => Pick(u, a);
-		var help = $"{a.Name}: {Describe.Action(a, _s.Data)}" + (ok ? "" : $"  ({why})");
-		Hover(button, a.Target is TargetType.Enemy or TargetType.Ally ? null : new Command(CommandKind.Act, u, a), help);
-		return button;
+		var preview = a.Target is TargetType.Enemy or TargetType.Ally ? null : new Command(CommandKind.Act, u, a);
+		var desc = Describe.Action(a, _s.Data) + (ok ? "" : $"  ({why})");
+		return Row(name ?? a.Name, sub ?? Sub(a), Delta(a), WeightTag(a.Weight), () => Pick(u, a), preview, desc, ok, minutes: a);
 	}
+
+	string Sub(ActionDef a)
+	{
+		var who = a.Target switch
+		{
+			TargetType.Enemy => "one enemy",
+			TargetType.AllEnemies => "every enemy",
+			TargetType.Ally => "one ally",
+			TargetType.AllAllies => "the party",
+			_ => "self",
+		};
+		if (_s.Items.TryGetValue(a.Id, out var n)) return $"×{n} · {who}";
+		return a.Element == Element.None ? who : $"{a.Element} · {who}";
+	}
+
+	static string Delta(ActionDef a)
+	{
+		var parts = new List<string>();
+		if (a.MinuteCost > 0) parts.Add($"−{a.MinuteCost}");
+		if (a.MinuteGain > 0) parts.Add($"+{a.MinuteGain}");
+		if (a.HpCost > 0) parts.Add($"{Describe.Pct(a.HpCost)} HP");
+		return string.Join(" ", parts);
+	}
+
+	static string WeightTag(Weight w) => w switch { Weight.Light => "LIGHT", Weight.Heavy => "HEAVY", _ => "" };
 
 	void Pick(Combatant u, ActionDef a)
 	{
-		if (a.Target is TargetType.Enemy or TargetType.Ally) ShowTargets(u, a, CommandKind.Act);
+		if (a.Target is TargetType.Enemy or TargetType.Ally) ShowTargets(u, a, CommandKind.Act, ShowChoices);
 		else Choose(new Command(CommandKind.Act, u, a));
 	}
 
-	void ShowTargets(Combatant u, ActionDef a, CommandKind kind)
+	void ShowTargets(Combatant u, ActionDef a, CommandKind kind, Action back)
 	{
-		var help = $"{a.Name}: {Describe.Action(a, _s.Data)}";
-		var buttons = _b.Targets(u, a).Select(t =>
+		var desc = $"{a.Name}: {Describe.Action(a, _s.Data)}";
+		var rows = _b.Targets(u, a).Select(t =>
 		{
 			var cmd = new Command(kind, u, a, t);
-			var button = new Button { Text = $"→ {t.Def.Name}", Alignment = HorizontalAlignment.Left };
-			button.Pressed += () => Choose(cmd);
-			Hover(button, kind == CommandKind.Act ? cmd : null, help);
-			return (Control)button;
-		});
-		_help.Text = _helpDefault = help;
-		SetMenu($"{a.Name}: pick a target", buttons.Append(Link("◂ Back", ShowChoices)).ToArray());
-	}
-
-	/// <summary>
-	/// Hovering or focusing an option shows what it does in the help line and, for actions, where the actor
-	/// and target would land on the board.
-	/// </summary>
-	void Hover(Button button, Command? cmd, string help)
-	{
-		void Show()
-		{
-			_help.Text = help;
-			if (cmd != null) ShowBoard(cmd);
-		}
-		button.MouseEntered += Show;
-		button.FocusEntered += Show;
-		button.MouseExited += () =>
-		{
-			_help.Text = _helpDefault;
-			if (cmd != null) ShowBoard();
-		};
+			var sub = t.IsParty ? $"HP {t.Body.Hp} / {t.Body.MaxHp}" : $"HP {t.Body.Hp}";
+			return Row($"→ {t.Def.Name}", sub, "", "", () => Choose(cmd), cmd, desc);
+		}).ToList();
+		SetMenu($"{a.Name.ToUpperInvariant()} · PICK A TARGET", rows, back);
 	}
 
 	void ShowReactions()
 	{
-		var items = new List<Control>();
-		if (_b.RushReady)
+		_passKeys.Clear();
+		var receivers = _b.ShiftReceivers();
+		if (_b.RushReady && !_skipRush)
 		{
-			var rush = Link("RUSH!  (everyone hits every enemy)", () => Choose(new Command(CommandKind.Rush)));
-			Hover(rush, null, $"Rush: every ally hits every enemy for Power {T.RushPower.ToString("0.0#", System.Globalization.CultureInfo.InvariantCulture)}, no element. Costs nothing and uses no one's turn.");
-			items.Add(rush);
+			ShowRushPrompt(receivers.Count > 0);
+			return;
 		}
-		var bonus = Describe.Pct(T.ChainBonus * Math.Min(_b.ChainPasses + 1, T.ChainMaxPasses));
-		foreach (var r in _b.ShiftReceivers())
+		var bonus = ChainBonus();
+		var rows = new List<Button>();
+		int key = 1;
+		foreach (var r in receivers)
 		{
-			var pass = Link($"Shift Change → {r.Def.Name}", () => Choose(new Command(CommandKind.ShiftChange, r)));
-			Hover(pass, null, $"Shift Change: {r.Def.Name} acts right now with +{bonus} damage for this chain. Your turn ends.");
-			items.Add(pass);
+			_passKeys[r] = key;
+			rows.Add(Row(r.Def.Name, "Acts now", $"+{bonus}", $"{key++}", () => Choose(new Command(CommandKind.ShiftChange, r)), null,
+				$"Shift Change: {r.Def.Name} acts right now with +{bonus} damage for this chain. Their next turn is used now, not added."));
 		}
-		items.Add(Link("End turn", () => Choose(new Command(CommandKind.Pass))));
-		SetPrompt(_b.RushReady ? "Everyone is Staggered!" : "Weak spot! Keep the momentum?", items, focusLast: false);
+		rows.Add(Row("End turn", "No hand-off", "", "X", () => Choose(new Command(CommandKind.Pass)), null, "End the turn here."));
+		DrawChips();
+		Stamp("WEAK HIT");
+		SetMenu($"SHIFT CHANGE · CHAIN {_b.ChainPasses + 1}", rows, back: () => Choose(new Command(CommandKind.Pass)));
 	}
 
+	/// <summary>Every enemy is Staggered: the one screen-wide prompt. The rest of the HUD steps aside.</summary>
+	void ShowRushPrompt(bool canHandOff)
+	{
+		void NotNow()
+		{
+			if (!canHandOff)
+			{
+				Choose(new Command(CommandKind.Pass));
+				return;
+			}
+			_skipRush = true;
+			Fill(_overlay, []);
+			SetHud(true);
+			_rushPreview = false;
+			ShowReactions();
+		}
+
+		SetHud(false);
+		Fill(_overlay, []);
+		_rushPreview = true;
+		var each = Forecast().Values.Select(o => o.Damage).DefaultIfEmpty(0).Average();
+		_rushPreview = false;
+		var box = Ui.V(10,
+			Ui.L("EVERY ENEMY STAGGERED", Ui.CondBold, 52, Ui.Amber),
+			Ui.L("Rush: the whole party hits every enemy. Uses no turn and no Minutes.", Ui.Body, 18, Ui.Dim));
+		var rush = Row("Rush", $"≈{Math.Round(each)} each", "", "FREE", () => Choose(new Command(CommandKind.Rush)), null, "", rushPreview: true);
+		var later = Row("Not now", canHandOff ? "Hand off or end the turn" : "End the turn", "", "X", NotNow);
+		box.AddChild(rush);
+		box.AddChild(later);
+		var panel = Ui.Wrap(box, Ui.Box(Ui.Panel, Ui.Amber, 2, 14, 28, 22));
+		panel.CustomMinimumSize = new Vector2(760, 0);
+		Place(_overlay, panel, 960, 800, above: false);
+		_back = NotNow;
+		rush.GrabFocus();
+	}
+
+	/// <summary>An enemy is about to act and someone's Overtime is full: a prompt over that enemy.</summary>
 	void ShowCutInWindow()
 	{
-		var items = _b.Party.Where(p => p.Alive && p.Def.Overtime != null && p.Overtime >= T.OtMax)
-			.Select(m =>
-			{
-				var ot = _s.Data.ActionById(m.Def.Overtime!);
-				var button = Link($"{m.Def.Name}: {ot.Name}", () => OnCutIn(m));
-				Hover(button, null, $"{ot.Name}: {Describe.Action(ot, _s.Data)}");
-				return (Control)button;
-			})
-			.Append(Link("Let it play", () => Choose(new Command(CommandKind.Pass))))
-			.ToList();
-		SetPrompt($"{_b.Actor!.Def.Name} is about to act. Cut in?", items, focusLast: true);
+		var actor = _b.Actor!;
+		_cutInActor = actor;
+		DrawField();
+		var rows = CutInRows();
+		var pass = Row("Let it play", $"{actor.Def.Name} acts", "", "X", () => Choose(new Command(CommandKind.Pass)));
+		rows.Add(pass);
+		var box = Ui.V(8,
+			Ui.L("CUT IN?", Ui.CondBold, 24, Ui.Amber),
+			Ui.L($"{actor.Def.Name} is about to act: {IntentText(actor)}", Ui.Body, 17, Ui.Dim));
+		foreach (var r in rows) box.AddChild(r);
+		_descLabel = DescLabel(400);
+		box.AddChild(_descLabel);
+		var panel = Ui.Wrap(box, Ui.Box(Ui.Panel, Ui.Danger, 2, 12, 16, 14));
+		panel.CustomMinimumSize = new Vector2(440, 0);
+		var view = _views.TryGetValue(actor, out var v) ? v : null;
+		float cx = view != null ? Math.Clamp(view.Position.X + view.Size.X / 2, 600, 1300) : 960;
+		var placed = Place(_overlay, panel, cx, view?.Position.Y - 60 ?? 400, above: true);
+		if (placed.Position.Y < 96) placed.Position = placed.Position with { Y = 96 };
+		_back = () => Choose(new Command(CommandKind.Pass));
+		pass.GrabFocus();   // the safe default
+	}
+
+	List<Combatant> ReadyMembers() => _b.Party.Where(CanCutIn).ToList();
+
+	/// <summary>Only while the battle is actually waiting on the player, never during a turn's playback.</summary>
+	bool CanCutIn(Combatant m) => !_s.Autoplay && m.Alive && m.Def.Overtime != null && m.Overtime >= T.OtMax
+		&& _b.AwaitingInput && _b.Phase is BattlePhase.ChooseAction or BattlePhase.TurnStart;
+
+	List<Button> CutInRows()
+	{
+		var ready = ReadyMembers();
+		return ready.Select(m =>
+		{
+			var ot = _s.Data.ActionById(m.Def.Overtime!);
+			var preview = ot.Target is TargetType.Enemy or TargetType.Ally ? null : new Command(CommandKind.CutIn, m, ot);
+			return Row(m.Def.Name, ot.Name, "", ready.Count == 1 ? "Q" : "", () => OnCutIn(m), preview, $"{ot.Name}: {Describe.Action(ot, _s.Data)}");
+		}).ToList();
+	}
+
+	void TryOvertime()
+	{
+		var ready = ReadyMembers();
+		if (ready.Count == 1) OnCutIn(ready[0]);
+		else if (ready.Count > 1) SetMenu("OVERTIME · CUT IN", CutInRows(), back: ShowChoices);
 	}
 
 	void OnCutIn(Combatant m)
 	{
 		var a = _s.Data.ActionById(m.Def.Overtime!);
-		if (a.Target is TargetType.Enemy or TargetType.Ally) ShowTargets(m, a, CommandKind.CutIn);
+		if (a.Target is TargetType.Enemy or TargetType.Ally) ShowTargets(m, a, CommandKind.CutIn, ShowChoices);
 		else Choose(new Command(CommandKind.CutIn, m, a));
 	}
 
-	void SetMenu(string title, params Control[] items)
+	// ---------- the command box ----------
+
+	/// <summary>Fills the command box above the active chip: title + Minutes pips, rows, the focused row's description, key hints.</summary>
+	void SetMenu(string title, List<Button> rows, Action? back)
 	{
-		Fill(_prompt, []);
-		Fill(_menu, items.Prepend(Text(title, Gold)).ToList());
-		items.OfType<Button>().FirstOrDefault(b => !b.Disabled)?.GrabFocus();
+		Fill(_overlay, []);
+		SetHud(true);
+		_back = back;
+		_pips = Ui.H(6);
+		var header = Ui.H(10, Ui.L(title, Ui.CondBold, 20, Ui.Dim), Ui.Spacer(), _pips);
+		var list = Ui.V(4);
+		foreach (var r in rows) list.AddChild(r);
+		_descLabel = DescLabel(388);
+		Fill(_command, [header, list, _descLabel, Hints(back != null)]);
+		_commandBox.Visible = true;
+		DrawPips();
+		(rows.FirstOrDefault(r => !r.Disabled) ?? rows.FirstOrDefault())?.GrabFocus();
+		Callable.From(PlaceCommandBox).CallDeferred();
 	}
 
-	void SetPrompt(string title, List<Control> items, bool focusLast)
+	static Label DescLabel(float width)
 	{
-		Fill(_menu, [Text("Waiting on the prompt above.", Faint)]);
-		Fill(_prompt, items.Prepend(Text(title, Gold)).ToList());
-		var buttons = items.OfType<Button>().ToList();
-		(focusLast ? buttons.LastOrDefault() : buttons.FirstOrDefault())?.GrabFocus();
+		var label = Ui.L("", Ui.Body, 16, Ui.Dim);
+		label.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+		label.CustomMinimumSize = new Vector2(width, 0);
+		return label;
 	}
 
-	static Button Link(string label, Action onPressed)
+	/// <summary>The box sits in the party's column, just above the chips, so it never covers an enemy.</summary>
+	void PlaceCommandBox()
 	{
-		var button = new Button { Text = label, Alignment = HorizontalAlignment.Left };
-		button.Pressed += onPressed;
+		if (!_commandBox.Visible) return;
+		_commandBox.Size = new Vector2(_commandBox.CustomMinimumSize.X, 0);
+		var anchor = _b.Actor is { IsParty: true } a && _chipOf.TryGetValue(a, out var chip) && IsInstanceValid(chip)
+			? chip.GetGlobalRect() : _chips.GetGlobalRect();
+		_commandBox.Position = new Vector2(Size.X - 40 - _commandBox.Size.X, anchor.Position.Y - 12 - _commandBox.Size.Y);
+	}
+
+	static Control Hints(bool canGoBack)
+	{
+		static Control Hint(string key, string what) =>
+			Ui.H(6, Ui.Wrap(Ui.L(key, Ui.Mono, 14), Ui.Box(Ui.Row, Ui.Muted, 1, 5, 6, 1)), Ui.L(what, Ui.Body, 15, Ui.Dim));
+		var row = Ui.H(14, Hint("Z", "Choose"));
+		if (canGoBack) row.AddChild(Hint("X", "Back"));
+		row.AddChild(Hint("Q", "Overtime"));
+		row.AddChild(Hint("Tab", "Inspect"));
+		return row;
+	}
+
+	/// <summary>One command: name, a short sub-line, the Minutes change and a weight tag. Focus previews it.</summary>
+	Button Row(string name, string sub, string delta, string tag, Action onPress, Command? preview = null, string desc = "",
+		bool enabled = true, bool rushPreview = false, ActionDef? minutes = null)
+	{
+		var button = new Button { CustomMinimumSize = new Vector2(0, 42), Disabled = !enabled, FocusMode = FocusModeEnum.All };
+		var subLabel = Ui.L(sub, Ui.Body, 16, Ui.Dim);
+		subLabel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+		subLabel.ClipText = true;
+		var row = Ui.H(12, Ui.L(name, Ui.CondBold, 24), subLabel);
+		if (delta != "") row.AddChild(Ui.L(delta, Ui.MonoBold, 17));
+		if (tag != "") row.AddChild(Ui.L(tag, Ui.Cond, 15, Ui.Dim));
+		button.AddChild(row);
+		row.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+		row.OffsetLeft = 14;
+		row.OffsetRight = -14;
+		if (!enabled) row.Modulate = Ui.Faint;
+		button.Pressed += onPress;
+		void Show()
+		{
+			_hover = preview;
+			_hoverAction = minutes ?? preview?.Action;
+			_rushPreview = rushPreview;
+			_desc = desc;
+			ShowDesc();
+			UpdatePreview();
+		}
+		button.FocusEntered += Show;
+		button.MouseEntered += () =>
+		{
+			if (enabled) button.GrabFocus();
+			else Show();
+		};
 		return button;
+	}
+
+	void ShowDesc()
+	{
+		if (_descLabel == null || !IsInstanceValid(_descLabel)) return;
+		var text = _desc;
+		if (_inspect && _b.Actor is { IsParty: true } u)
+			text = string.Join("\n", (u.Def.Passives ?? []).Select(p => Describe.Passive(p, T)).Prepend(text).Where(s => s != ""));
+		_descLabel.Text = text;
+		_descLabel.Visible = text != "";
+		Callable.From(PlaceCommandBox).CallDeferred();
+	}
+
+	/// <summary>Minutes pips; a preview shows spent pips hollow and gained ones half-lit.</summary>
+	void DrawPips()
+	{
+		if (_pips == null || !IsInstanceValid(_pips)) return;
+		int now = _b.Minutes, after = now;
+		if (_b.Phase == BattlePhase.ChooseAction && _hoverAction is { } a) after = Math.Clamp(now - a.MinuteCost + a.MinuteGain, 0, T.MaxMinutes);
+		Fill(_pips, Enumerable.Range(0, T.MaxMinutes).Select(i =>
+		{
+			var style = i < Math.Min(now, after) ? Ui.Box(Ui.Amber, radius: 9)
+				: i < now ? Ui.Box(Colors.Transparent, Ui.Amber, 2, 9)
+				: i < after ? Ui.Box(Ui.Amber with { A = 0.45f }, radius: 9)
+				: Ui.Box(Colors.Transparent, Ui.Muted, 2, 9);
+			var pip = Dot(Colors.White, 18, 9);
+			pip.AddThemeStyleboxOverride("panel", style);
+			return (Control)pip;
+		}).ToList());
+	}
+
+	void SetHud(bool on)
+	{
+		_board.Visible = _chips.Visible = _topBar.Visible = on;
+		if (!on) _commandBox.Visible = false;
+	}
+
+	static void Fill(Control box, IEnumerable<Control> items)
+	{
+		foreach (var child in box.GetChildren())
+		{
+			box.RemoveChild(child);
+			child.QueueFree();
+		}
+		foreach (var item in items) box.AddChild(item);
 	}
 
 	// ---------- feedback ----------
 
+	void Stamp(string text, Color? color = null)
+	{
+		if (_s.AnimSpeed <= 0) return;
+		_stampTween?.Kill();
+		_stamp.Text = text;
+		_stamp.AddThemeColorOverride("font_color", color ?? Ui.Amber);
+		_stamp.Visible = true;
+		_stamp.Modulate = Colors.Transparent;
+		_stamp.Scale = new Vector2(1.15f, 1.15f);
+		var speed = _s.AnimSpeed;
+		_stampTween = _stamp.CreateTween();
+		_stampTween.TweenProperty(_stamp, "modulate", Colors.White, 0.12 * speed);
+		_stampTween.Parallel().TweenProperty(_stamp, "scale", Vector2.One, 0.12 * speed);
+		_stampTween.TweenInterval(0.5 * speed);
+		_stampTween.TweenProperty(_stamp, "modulate", Colors.Transparent, 0.3 * speed);
+		_stampTween.TweenCallback(Callable.From(() => _stamp.Visible = false));
+	}
+
 	void Popup(Combatant? u, string text, Color color)
 	{
-		if (u == null || _s.AnimSpeed <= 0 || !_panels.TryGetValue(u, out var panel) || !IsInstanceValid(panel)) return;
-		var label = Text(text, color);
-		label.AddThemeFontSizeOverride("font_size", 22);
+		if (u == null || _s.AnimSpeed <= 0 || !_views.TryGetValue(u, out var view) || !IsInstanceValid(view)) return;
+		var label = Ui.L(text, Ui.MonoBold, 34, color);
+		label.AddThemeConstantOverride("outline_size", 8);
+		label.AddThemeColorOverride("font_outline_color", Ui.Ground);
 		label.ZIndex = 10;
 		AddChild(label);
-		label.GlobalPosition = panel.GlobalPosition + new Vector2(panel.Size.X / 2 - 16, 4);
+		label.Size = label.GetCombinedMinimumSize();
+		label.GlobalPosition = view.GlobalPosition + new Vector2((view.Size.X - label.Size.X) / 2, -label.Size.Y);
 		var tween = label.CreateTween();
-		tween.TweenProperty(label, "position:y", label.Position.Y - 36, 0.7 * _s.AnimSpeed);
+		tween.TweenProperty(label, "position:y", label.Position.Y - 44, 0.7 * _s.AnimSpeed);
 		tween.Parallel().TweenProperty(label, "modulate:a", 0.0, 0.7 * _s.AnimSpeed);
 		tween.TweenCallback(Callable.From(label.QueueFree));
 	}
 
-	/// <summary>Hit feedback: a red flash. (Container children can't be shaken by position.)</summary>
+	/// <summary>Hit feedback: a red flash on the shape.</summary>
 	void Flash(Combatant? u)
 	{
-		if (u == null || _s.AnimSpeed <= 0 || !_panels.TryGetValue(u, out var panel) || !IsInstanceValid(panel)) return;
-		panel.Modulate = Red;
-		panel.CreateTween().TweenProperty(panel, "modulate", u.Alive ? Colors.White : Faint, 0.25 * _s.AnimSpeed);
+		if (u == null || _s.AnimSpeed <= 0 || !_views.TryGetValue(u, out var view) || !IsInstanceValid(view)) return;
+		view.Modulate = Ui.Danger;
+		view.CreateTween().TweenProperty(view, "modulate", Colors.White, 0.25 * _s.AnimSpeed);
 	}
+
+	// ---------- how a battle ends ----------
 
 	void Finish()
 	{
@@ -533,9 +993,97 @@ public partial class BattleScreen : Control
 			Callable.From(() => GetTree().ChangeSceneToFile("res://battle/select.tscn")).CallDeferred();
 			return;
 		}
-		GetNode<Label>("%ResultText").Text = (_b.Won ? "VICTORY" : "DEFEAT: the night is lost") +
-			$"\nTurns: {_b.TurnCount}    Party HP lost: {lost:0}%";
-		GetNode<Control>("%Result").Visible = true;
-		GetNode<Button>("%Continue").GrabFocus();
+		SetHud(false);
+		_caption.Text = "";
+		Fill(_overlay, []);
+		if (_b.Won) Victory(lost);
+		else Defeat();
+	}
+
+	Control Screen(Color bg)
+	{
+		var screen = new Panel { MouseFilter = MouseFilterEnum.Stop };
+		screen.AddThemeStyleboxOverride("panel", Ui.Box(bg, radius: 0));
+		_overlay.AddChild(screen);
+		screen.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
+		return screen;
+	}
+
+	static T At<T>(Control parent, T c, float x, float y, float width = 0) where T : Control
+	{
+		parent.AddChild(c);
+		if (width > 0) c.CustomMinimumSize = c.CustomMinimumSize with { X = width };
+		c.Position = new Vector2(x, y);
+		c.Size = c.GetCombinedMinimumSize();
+		return c;
+	}
+
+	void Victory(double lost)
+	{
+		var screen = Screen(Ui.Ground);
+		At(screen, Ui.V(12,
+			Ui.L(_encounter.Name.ToUpperInvariant(), Ui.Cond, 22, Ui.Dim),
+			Ui.L("CLEARED", Ui.CondBold, 150, Ui.Amber),
+			Ui.L($"{_b.TurnCount} turns · {Ui.Clock(_b.Clock)} battle time · {lost:0}% party HP lost", Ui.Mono, 22, Ui.Dim)), 120, 120);
+		var note = At(screen, Ui.L($"HP and Overtime carry over to the next fight. Minutes reset to {T.StartMinutes}.", Ui.Body, 20, Ui.Dim), 124, 440, 680);
+		note.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+
+		var party = Ui.V(16);
+		foreach (var m in _b.Party)
+		{
+			var color = Ui.Member(m.Def.Id);
+			var (hp, ot) = _s.Party[m.Def.Id];
+			party.AddChild(Ui.Wrap(Ui.V(12,
+				Ui.L(m.Def.Name.ToUpperInvariant(), Ui.CondBold, 32, color),
+				StatRow("HP", hp / (double)m.Body.MaxHp, $"{hp} / {m.Body.MaxHp}", Ui.HpFill, 12),
+				StatRow("OVERTIME", Math.Min(1, ot / (double)T.OtMax), $"{ot}", color, 10)), Ui.Box(Ui.Panel, Ui.Line, 1, 12, 22, 18)));
+		}
+		At(screen, party, 900, 120, 900);
+		var go = BigButton("CONTINUE   Z", primary: true, GoToSelect);
+		At(screen, go, 1920 - 120 - go.GetCombinedMinimumSize().X, 930);
+		go.GrabFocus();
+	}
+
+	static Control StatRow(string label, double frac, string value, Color fill, int height)
+	{
+		var name = Ui.L(label, Ui.Cond, 16, Ui.Dim);
+		name.CustomMinimumSize = new Vector2(110, 0);
+		var bar = Ui.Bar(frac, fill, height);
+		bar.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+		bar.SizeFlagsVertical = SizeFlags.ShrinkCenter;
+		var number = Ui.L(value, Ui.MonoBold, 18);
+		number.CustomMinimumSize = new Vector2(150, 0);
+		number.HorizontalAlignment = HorizontalAlignment.Right;
+		return Ui.H(14, name, bar, number);
+	}
+
+	void Defeat()
+	{
+		var screen = Screen(new Color("#07090F"));
+		var line = Ui.L("The night is gone. Your next dive starts from the last rest point.", Ui.Body, 28, Ui.Dim);
+		At(screen, Ui.V(18,
+			Ui.L(_encounter.Name.ToUpperInvariant(), Ui.Mono, 20, Ui.Dim),
+			Ui.L("You wake at your desk.", Ui.Semi, 84),
+			line), 160, 170, 1300);
+		_onRetry = () => GetTree().ReloadCurrentScene();   // Session.Next still holds this encounter; a loss restored HP
+		var work = BigButton("GO TO WORK   Z", primary: true, GoToSelect);
+		At(screen, Ui.H(16, work, BigButton("RETRY THE BATTLE   R", primary: false, _onRetry)), 160, 480);
+		work.GrabFocus();
+	}
+
+	static Button BigButton(string text, bool primary, Action onPressed)
+	{
+		var b = new Button { Text = text, CustomMinimumSize = new Vector2(0, 64) };
+		var normal = primary ? Ui.Box(Ui.Amber, radius: 10, padX: 28) : Ui.Box(Colors.Transparent, Ui.Muted, 2, 10, 28);
+		foreach (var s in new[] { "normal", "hover", "pressed" }) b.AddThemeStyleboxOverride(s, normal);
+		var focus = Ui.Box(Colors.Transparent, Ui.Text, 2, 10);
+		focus.DrawCenter = false;
+		b.AddThemeStyleboxOverride("focus", focus);
+		foreach (var c in new[] { "font_color", "font_hover_color", "font_focus_color", "font_pressed_color" })
+			b.AddThemeColorOverride(c, primary ? Ui.Ground : Ui.Text);
+		b.AddThemeFontOverride("font", Ui.CondBold);
+		b.AddThemeFontSizeOverride("font_size", 26);
+		b.Pressed += onPressed;
+		return b;
 	}
 }

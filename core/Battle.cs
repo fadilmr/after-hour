@@ -197,7 +197,7 @@ public sealed partial class Battle
     /// </summary>
     public IReadOnlyList<Combatant> Preview(int n = 8, Command? hypothetical = null, List<double>? times = null)
     {
-        if (hypothetical is not { Kind: CommandKind.Act, Unit: { } u, Action: { } a } || PartyTargets(u, a, hypothetical.Target) is not { } targets)
+        if (hypothetical is not { Kind: CommandKind.Act or CommandKind.CutIn, Unit: { } u, Action: { } a } || PartyTargets(u, a, hypothetical.Target) is not { } targets)
             return Timeline.Preview(Living, n, times: times);
 
         var cd = Living.ToDictionary(x => x, x => x.Countdown);
@@ -290,15 +290,17 @@ public sealed partial class Battle
     {
         var e = Actor!;
         var a = e.Intent ?? EnemyAi.RollIntent(this, e);
+        var locked = a == e.Intent ? e.IntentTarget : null;
         Phase = BattlePhase.Resolve;
-        Resolve(e, a, EnemyTargets(e, a));
+        Resolve(e, a, EnemyTargets(e, a, locked));
         if (Phase == BattlePhase.BattleEnd) return;
         EnemyAi.OnActed(this, e, a);
         Timeline.Reset(e, a.Weight);
         Phase = BattlePhase.TurnEnd;
     }
 
-    List<Combatant> EnemyTargets(Combatant e, ActionDef a)
+    /// <param name="locked">The target picked with the intent; used while it is still a valid pick.</param>
+    List<Combatant> EnemyTargets(Combatant e, ActionDef a, Combatant? locked = null)
     {
         var foes = Party.Where(p => p.Alive).ToList();
         var friends = Enemies.Where(x => x.Alive).ToList();
@@ -307,8 +309,8 @@ public sealed partial class Battle
             TargetType.Self => [e],
             TargetType.AllEnemies => foes,
             TargetType.AllAllies => friends,
-            TargetType.Ally => [friends[Rng.Next(friends.Count)]],
-            _ => [foes[Rng.Next(foes.Count)]],
+            TargetType.Ally => [locked != null && friends.Contains(locked) ? locked : friends[Rng.Next(friends.Count)]],
+            _ => [locked != null && foes.Contains(locked) ? locked : foes[Rng.Next(foes.Count)]],
         };
     }
 
@@ -458,7 +460,10 @@ public sealed partial class Battle
     {
         if (!e.Alive) return;
         e.Intent = e.RecoverNextTurn ? RecoverAction : EnemyAi.RollIntent(this, e);
-        Emit(EventKind.Intent, e, 0, $"{e.Def.Name} readies {e.Intent.Name}.");
+        e.IntentTarget = e.Intent.Target is TargetType.Enemy or TargetType.Ally ? EnemyTargets(e, e.Intent)[0] : null;
+        Emit(EventKind.Intent, e, 0, e.IntentTarget is { } t && t.IsParty
+            ? $"{e.Def.Name} readies {e.Intent.Name} → {t.Def.Name}."
+            : $"{e.Def.Name} readies {e.Intent.Name}.");
     }
 
     /// <summary>Ends the battle if one side is down. Runs after every resolution, so a kill mid-action ends it at once.</summary>

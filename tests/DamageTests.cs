@@ -143,3 +143,21 @@ public class DamageTests
         Assert.True(rolls.Distinct().Count() > 3);
     }
 }
+
+public class ForecastTests
+{
+    [Fact]
+    public void ExpectedSitsInsideTheRolledRange()
+    {
+        var b = TestData.NewBattle(["ines"], ["deadline"]);
+        b.Data.Tuning.CritChance = 0;
+        var ines = b.Party[0];
+        var dl = b.Enemies[0];
+        var flambe = b.Data.ActionById("ines_flambe");
+        double expected = Damage.Expected(b.Data.Tuning, ines, dl, flambe, 0);
+        var rng = new Random(3);
+        var rolls = Enumerable.Range(0, 200).Select(_ => Damage.Compute(b.Data.Tuning, ines, dl, flambe, 0, rng).Amount).ToList();
+        Assert.InRange(expected, rolls.Min() - 0.5, rolls.Max() + 0.5);
+        Assert.InRange(expected, 0.95 * rolls.Average(), 1.05 * rolls.Average());
+    }
+}
