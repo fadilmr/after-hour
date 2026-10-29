@@ -14,7 +14,7 @@ namespace AfterHour;
 /// </summary>
 public partial class BattleScreen : Control
 {
-	const float Floor = 600, PartyLeft = 40, EnemyLeft = 580, EnemyWidth = 920, PartyWidth = 500;
+	const float Floor = 600, PartyLeft = 40, EnemyLeft = 620, EnemyWidth = 880, PartyWidth = 560;
 	const float Grow = 1.6f;   // sprite scale; the field fills the space left of the board
 
 	readonly Queue<(BattleEvent E, int Hp)> _queue = new();       // each event with its target's HP right after it happened

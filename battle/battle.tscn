@@ -80,7 +80,7 @@ theme_override_constants/separation = 4
 [node name="Caption" type="Label" parent="."]
 unique_name_in_owner = true
 layout_mode = 0
-offset_left = 580.0
+offset_left = 620.0
 offset_top = 40.0
 offset_right = 1500.0
 offset_bottom = 80.0
