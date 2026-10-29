@@ -14,7 +14,7 @@ namespace AfterHour;
 /// </summary>
 public partial class BattleScreen : Control
 {
-	const float Floor = 600, EnemyLeft = 700, EnemyWidth = 680, PartyLeft = 1440, PartyWidth = 440;
+	const float Floor = 600, PartyLeft = 40, EnemyLeft = 540, EnemyWidth = 680, PartyWidth = 440;
 
 	readonly Queue<(BattleEvent E, int Hp)> _queue = new();       // each event with its target's HP right after it happened
 	readonly Dictionary<Combatant, Control> _views = new();       // shapes on the field, for popups and placing prompts
@@ -81,7 +81,7 @@ public partial class BattleScreen : Control
 		_encounter = _s.Next ?? _s.Data.Encounters[0];
 		Style(GetNode<Label>("%Location"), _encounter.Name.ToUpperInvariant(), Ui.Cond, 16, Ui.Dim);
 		Style(GetNode<Label>("%BoardTitle"), null, Ui.CondBold, 28, Ui.Text);
-		Style(_boardSub, null, Ui.Cond, 15, Ui.Dim);
+		Style(_boardSub, null, Ui.Cond, 15, Ui.Text);
 		Style(_caption, "", Ui.Semi, 20, Ui.Dim);
 		Style(_stamp, "", Ui.CondBold, 96, Ui.Amber);
 		_commandBox.AddThemeStyleboxOverride("panel", Ui.Box(Ui.Panel, Ui.Amber, 2, 12, 14, 14));
@@ -327,7 +327,7 @@ public partial class BattleScreen : Control
 		var size = _callout.GetCombinedMinimumSize();
 		_callout.Size = size;
 		var top = view.GlobalPosition.Y - size.Y - (_actor.IsParty ? 110 : 70);
-		var x = Math.Clamp(view.GlobalPosition.X + view.Size.X / 2 - size.X / 2, 400, Size.X - 40 - size.X);
+		var x = Math.Clamp(view.GlobalPosition.X + view.Size.X / 2 - size.X / 2, 40, Size.X - 400 - size.X);
 		_callout.GlobalPosition = new Vector2(x, Math.Max(96, top));
 	}
 
@@ -337,8 +337,8 @@ public partial class BattleScreen : Control
 		_callout = null;
 	}
 
-	/// <summary>Enemies stand left of the party, so an enemy lunges right and a member left.</summary>
-	static float Toward(Combatant u) => u.IsParty ? -1 : 1;
+	/// <summary>Enemies stand right of the party, so an enemy lunges left and a member right.</summary>
+	static float Toward(Combatant u) => u.IsParty ? 1 : -1;
 
 	static Vector2 Home(Control v) => v.HasMeta("home") ? (Vector2)v.GetMeta("home") : v.Position;
 
@@ -464,8 +464,8 @@ public partial class BattleScreen : Control
 			for (int i = 0; i < baseOrder.Count; i++) before.TryAdd(baseOrder[i], baseTimes[i]);
 		}
 		var marked = hyp != null ? PreviewTargets(hyp).ToHashSet() : new HashSet<Combatant>();
-		_boardSub.Text = hyp != null ? $"AFTER {hyp.Action!.Name.ToUpperInvariant()}" : "KEBERANGKATAN BERIKUTNYA";
-		_boardSub.AddThemeColorOverride("font_color", hyp != null ? Ui.Text : Ui.Dim);
+		_boardSub.Visible = hyp != null;
+		if (hyp != null) _boardSub.Text = $"AFTER {hyp.Action!.Name.ToUpperInvariant()}";
 
 		var seen = new HashSet<Combatant>();
 		Fill(_boardRows, order.Select((u, i) =>
@@ -994,7 +994,7 @@ public partial class BattleScreen : Control
 		var panel = Ui.Wrap(box, Ui.Box(Ui.Panel, Ui.Danger, 2, 12, 16, 14));
 		panel.CustomMinimumSize = new Vector2(440, 0);
 		var view = _views.TryGetValue(actor, out var v) ? v : null;
-		float cx = view != null ? Math.Clamp(view.Position.X + view.Size.X / 2, 600, 1300) : 960;
+		float cx = view != null ? Math.Clamp(view.Position.X + view.Size.X / 2, 620, 1320) : 960;
 		var placed = Place(_overlay, panel, cx, view?.Position.Y - 60 ?? 400, above: true);
 		if (placed.Position.Y < 96) placed.Position = placed.Position with { Y = 96 };
 		_back = () => Choose(new Command(CommandKind.Pass));
@@ -1083,7 +1083,7 @@ public partial class BattleScreen : Control
 		_commandBox.Size = new Vector2(_commandBox.CustomMinimumSize.X, 0);
 		var anchor = _b.Actor is { IsParty: true } a && _chipOf.TryGetValue(a, out var chip) && IsInstanceValid(chip)
 			? chip.GetGlobalRect() : _chips.GetGlobalRect();
-		_commandBox.Position = new Vector2(Size.X - 40 - _commandBox.Size.X, anchor.Position.Y - 12 - _commandBox.Size.Y);
+		_commandBox.Position = new Vector2(40, anchor.Position.Y - 12 - _commandBox.Size.Y);
 	}
 
 	static Control Hints(bool canGoBack)

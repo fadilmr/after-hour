@@ -24,9 +24,9 @@ color = Color(0.043, 0.063, 0.125, 1)
 
 [node name="Ground" type="ColorRect" parent="."]
 layout_mode = 0
-offset_left = 660.0
+offset_left = 0.0
 offset_top = 598.0
-offset_right = 1920.0
+offset_right = 1260.0
 offset_bottom = 601.0
 mouse_filter = 2
 color = Color(0.29, 0.25, 0.15, 1)
@@ -44,10 +44,14 @@ mouse_filter = 2
 [node name="Board" type="PanelContainer" parent="."]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(330, 0)
-layout_mode = 0
-offset_left = 40.0
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -370.0
 offset_top = 40.0
-offset_right = 370.0
+offset_right = -40.0
+grow_horizontal = 0
 offset_bottom = 80.0
 
 [node name="BoardBox" type="VBoxContainer" parent="Board"]
@@ -66,7 +70,7 @@ text = "NEXT DEPARTURES"
 [node name="BoardSub" type="Label" parent="Board/BoardBox"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "KEBERANGKATAN BERIKUTNYA"
+visible = false
 
 [node name="BoardRows" type="VBoxContainer" parent="Board/BoardBox"]
 unique_name_in_owner = true
@@ -76,9 +80,9 @@ theme_override_constants/separation = 4
 [node name="Caption" type="Label" parent="."]
 unique_name_in_owner = true
 layout_mode = 0
-offset_left = 680.0
+offset_left = 540.0
 offset_top = 40.0
-offset_right = 1380.0
+offset_right = 1240.0
 offset_bottom = 80.0
 horizontal_alignment = 1
 vertical_alignment = 1
@@ -87,16 +91,12 @@ clip_text = true
 [node name="TopBar" type="HBoxContainer" parent="."]
 unique_name_in_owner = true
 layout_mode = 1
-anchors_preset = 1
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -500.0
+offset_left = 40.0
 offset_top = 36.0
-offset_right = -40.0
+offset_right = 540.0
 offset_bottom = 80.0
-grow_horizontal = 0
 theme_override_constants/separation = 10
-alignment = 2
+alignment = 0
 
 [node name="Speed" type="Button" parent="TopBar"]
 unique_name_in_owner = true
@@ -120,9 +120,9 @@ text = "Esc  MENU"
 unique_name_in_owner = true
 visible = false
 layout_mode = 0
-offset_left = 660.0
+offset_left = 0.0
 offset_top = 120.0
-offset_right = 1920.0
+offset_right = 1260.0
 offset_bottom = 240.0
 pivot_offset = Vector2(630, 60)
 horizontal_alignment = 1
@@ -131,29 +131,26 @@ vertical_alignment = 1
 [node name="Chips" type="HBoxContainer" parent="."]
 unique_name_in_owner = true
 layout_mode = 1
-anchors_preset = 3
-anchor_left = 1.0
+anchors_preset = 2
 anchor_top = 1.0
-anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -1100.0
+offset_left = 40.0
 offset_top = -124.0
-offset_right = -40.0
+offset_right = 1100.0
 offset_bottom = -24.0
-grow_horizontal = 0
 grow_vertical = 0
 mouse_filter = 2
 theme_override_constants/separation = 12
-alignment = 2
+alignment = 0
 
 [node name="CommandBox" type="PanelContainer" parent="."]
 unique_name_in_owner = true
 visible = false
 custom_minimum_size = Vector2(420, 0)
 layout_mode = 0
-offset_left = 1460.0
+offset_left = 40.0
 offset_top = 640.0
-offset_right = 1880.0
+offset_right = 460.0
 offset_bottom = 900.0
 
 [node name="Command" type="VBoxContainer" parent="CommandBox"]
@@ -175,15 +172,12 @@ mouse_filter = 2
 unique_name_in_owner = true
 visible = false
 layout_mode = 1
-anchors_preset = 11
-anchor_left = 1.0
-anchor_right = 1.0
+anchors_preset = 9
 anchor_bottom = 1.0
-offset_left = -560.0
+offset_left = 40.0
 offset_top = 96.0
-offset_right = -40.0
+offset_right = 600.0
 offset_bottom = -330.0
-grow_horizontal = 0
 grow_vertical = 2
 
 [node name="Log" type="RichTextLabel" parent="LogPanel"]
@@ -195,14 +189,11 @@ scroll_following = true
 unique_name_in_owner = true
 visible = false
 layout_mode = 1
-anchors_preset = 11
-anchor_left = 1.0
-anchor_right = 1.0
+anchors_preset = 9
 anchor_bottom = 1.0
-offset_left = -480.0
+offset_left = 40.0
 offset_top = 96.0
-offset_right = -40.0
+offset_right = 520.0
 offset_bottom = -330.0
-grow_horizontal = 0
 grow_vertical = 2
 script = ExtResource("2_tuning")
