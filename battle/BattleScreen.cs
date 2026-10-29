@@ -14,7 +14,8 @@ namespace AfterHour;
 /// </summary>
 public partial class BattleScreen : Control
 {
-	const float Floor = 600, PartyLeft = 40, EnemyLeft = 540, EnemyWidth = 680, PartyWidth = 440;
+	const float Floor = 600, PartyLeft = 40, EnemyLeft = 580, EnemyWidth = 920, PartyWidth = 500;
+	const float Grow = 1.6f;   // sprite scale; the field fills the space left of the board
 
 	readonly Queue<(BattleEvent E, int Hp)> _queue = new();       // each event with its target's HP right after it happened
 	readonly Dictionary<Combatant, Control> _views = new();       // shapes on the field, for popups and placing prompts
@@ -326,7 +327,7 @@ public partial class BattleScreen : Control
 		AddChild(_callout);
 		var size = _callout.GetCombinedMinimumSize();
 		_callout.Size = size;
-		var top = view.GlobalPosition.Y - size.Y - (_actor.IsParty ? 110 : 70);
+		var top = view.GlobalPosition.Y - size.Y - (_actor.IsParty ? 150 : 70);
 		var x = Math.Clamp(view.GlobalPosition.X + view.Size.X / 2 - size.X / 2, 40, Size.X - 400 - size.X);
 		_callout.GlobalPosition = new Vector2(x, Math.Max(96, top));
 	}
@@ -627,6 +628,7 @@ public partial class BattleScreen : Control
 	void EnemyView(Combatant e, float cx, float slot, Outcome? o, bool targeted)
 	{
 		var (size, round) = ShapeOf(e.Def);
+		size *= Grow;
 		size *= Math.Min(1f, (slot - 24) / size.X);
 		bool acting = e == _cutInActor;
 		var holder = Holder(e);
@@ -650,7 +652,7 @@ public partial class BattleScreen : Control
 			if (_inspect && _hover?.Action is { } a) card.AddChild(Ui.L($"Power {a.Power:0.0#} · Stagger {a.Stagger}", Ui.Mono, 14, Ui.Dim));
 			Place(holder, Ui.Wrap(card, Ui.Box(Ui.Raised, Ui.Amber, 2, 10, 12, 8)), cx, top, above: true);
 		}
-		Place(holder, Plate(e, Math.Clamp(slot - 16, 170, 240), o, targeted), cx, Floor + 16, above: false);
+		Place(holder, Plate(e, Math.Clamp(slot - 16, 200, 300), o, targeted), cx, Floor + 16, above: false);
 	}
 
 	/// <summary>One glyph-like word and a number, over the enemy: "ATK ×3 → ROOK", "NOTICE IN 2".</summary>
@@ -732,15 +734,17 @@ public partial class BattleScreen : Control
 		var color = Ui.Member(m.Def.Id);
 		var holder = Holder(m);
 		holder.Modulate = Hp(m) > 0 ? Colors.White : Ui.Faint;
-		var body = new Panel { Position = new Vector2(cx - 48, Floor - 150), Size = new Vector2(96, 150), MouseFilter = MouseFilterEnum.Ignore };
+		var bodySize = new Vector2(96, 150) * Grow;
+		float headSize = 56 * Grow;
+		var body = new Panel { Position = new Vector2(cx - bodySize.X / 2, Floor - bodySize.Y), Size = bodySize, MouseFilter = MouseFilterEnum.Ignore };
 		var bodyStyle = Ui.Box(new Color("#141C33"), targeted ? Ui.Amber : color, 3, 12);
-		bodyStyle.CornerRadiusTopLeft = bodyStyle.CornerRadiusTopRight = 40;
+		bodyStyle.CornerRadiusTopLeft = bodyStyle.CornerRadiusTopRight = (int)(40 * Grow);
 		body.AddThemeStyleboxOverride("panel", bodyStyle);
-		var head = new Panel { Position = new Vector2(20, -64), Size = new Vector2(56, 56), MouseFilter = MouseFilterEnum.Ignore };
-		head.AddThemeStyleboxOverride("panel", Ui.Box(new Color("#141C33"), targeted ? Ui.Amber : color, 3, 28));
+		var head = new Panel { Position = new Vector2((bodySize.X - headSize) / 2, -headSize - 8), Size = new Vector2(headSize, headSize), MouseFilter = MouseFilterEnum.Ignore };
+		head.AddThemeStyleboxOverride("panel", Ui.Box(new Color("#141C33"), targeted ? Ui.Amber : color, 3, (int)(headSize / 2)));
 		holder.AddChild(body);
 		body.AddChild(head);   // the head rides on the body, so a lunge or shake moves both
-		Place(holder, Ui.L(m.Def.Name.ToUpperInvariant(), Ui.CondBold, 20, color), cx, Floor - 150 - 64 - 6, above: true);
+		Place(holder, Ui.L(m.Def.Name.ToUpperInvariant(), Ui.CondBold, 20, color), cx, Floor - bodySize.Y - headSize - 14, above: true);
 		_views[m] = body;
 	}
 
