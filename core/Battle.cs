@@ -22,7 +22,7 @@ public enum EventKind
 }
 
 /// <summary>Something that happened. Text is the battle-log line; Amount depends on the kind (damage, time, Minutes...).</summary>
-public sealed record BattleEvent(EventKind Kind, Combatant? Target, double Amount, string Text);
+public sealed record BattleEvent(EventKind Kind, Combatant? Target, double Amount, string Text, ActionDef? Action = null);
 
 /// <summary>A party member entering battle. BondRank null = Noa: Shift Change always unlocked, no rank perks.</summary>
 public sealed record MemberSetup(string Id, int Hp, int Overtime, int? BondRank);
@@ -492,6 +492,6 @@ public sealed partial class Battle
         return u;
     }
 
-    internal void Emit(EventKind kind, Combatant? target, double amount, string text) =>
-        Emitted?.Invoke(new BattleEvent(kind, target, amount, text));
+    internal void Emit(EventKind kind, Combatant? target, double amount, string text, ActionDef? action = null) =>
+        Emitted?.Invoke(new BattleEvent(kind, target, amount, text, action));
 }

@@ -17,7 +17,7 @@ public sealed partial class Battle
     /// <summary>Per target: the damage hits, then weakness and Stagger, then the Echo repeat, then effects.</summary>
     ActionReport Resolve(Combatant actor, ActionDef a, List<Combatant> targets)
     {
-        Emit(EventKind.Action, actor, 0, $"{actor.Def.Name}: {a.Name}");
+        Emit(EventKind.Action, actor, 0, $"{actor.Def.Name}: {a.Name}", a);
         _nightWatchUsed = false;
         _hitOt.Clear();
         if (a.MinuteGain > 0) AddMinutes(a.MinuteGain);

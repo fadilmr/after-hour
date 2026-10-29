@@ -106,7 +106,8 @@ public static class Ui
 		Wrap(L(text, CondBold, size, fill == null ? color : Ground), Box(fill ?? Colors.Transparent, fill == null ? color : null, 2, 6, 8, 1));
 
 	/// <summary>A flat bar; height in px, frac in 0..1.</summary>
-	public static ProgressBar Bar(double frac, Color fill, int height)
+	/// <summary>A bar; ghost above frac draws the chunk just lost as a pale segment (child "Ghost"), for the caller to fade.</summary>
+	public static ProgressBar Bar(double frac, Color fill, int height, double ghost = 0)
 	{
 		var bar = new ProgressBar
 		{
@@ -115,6 +116,16 @@ public static class Ui
 		};
 		bar.AddThemeStyleboxOverride("fill", Box(fill, radius: height / 2));
 		bar.AddThemeStyleboxOverride("background", Box(Line, radius: height / 2));
+		if (ghost > frac)
+		{
+			var chunk = new Panel
+			{
+				Name = "Ghost", MouseFilter = Control.MouseFilterEnum.Ignore,
+				AnchorLeft = (float)System.Math.Max(0, frac), AnchorRight = (float)System.Math.Min(1, ghost), AnchorBottom = 1,
+			};
+			chunk.AddThemeStyleboxOverride("panel", Box(Text with { A = 0.75f }, radius: height / 2));
+			bar.AddChild(chunk);
+		}
 		return bar;
 	}
 

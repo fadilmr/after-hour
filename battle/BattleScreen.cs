@@ -16,8 +16,12 @@ public partial class BattleScreen : Control
 {
 	const float Floor = 600, EnemyLeft = 700, EnemyWidth = 680, PartyLeft = 1440, PartyWidth = 440;
 
-	readonly Queue<BattleEvent> _queue = new();
+	readonly Queue<(BattleEvent E, int Hp)> _queue = new();       // each event with its target's HP right after it happened
 	readonly Dictionary<Combatant, Control> _views = new();       // shapes on the field, for popups and placing prompts
+	readonly Dictionary<Combatant, Control> _holders = new();     // everything drawn for one unit, for dimming and lifting
+	readonly Dictionary<Body, int> _shownHp = new();              // HP on screen while a turn plays back; empty = live
+	readonly Dictionary<Body, int> _ghostHp = new();              // HP before the hit just shown, drawn as a draining chunk
+	readonly HashSet<Combatant> _spotlight = new();               // the actor and its targets during playback; the rest dim
 	readonly Dictionary<Combatant, Control> _chipOf = new();
 	readonly Dictionary<Combatant, int> _passKeys = new();        // Shift Change partners and their number keys
 	Session _s = null!;
@@ -44,6 +48,11 @@ public partial class BattleScreen : Control
 	string _desc = "";
 	Action? _back, _onRetry;
 	Combatant? _cutInActor;
+	Combatant? _actor;           // who is acting in the playback
+	ActionDef? _action;          // what they're doing; null outside an action (turn start, Rush)
+	Control? _callout;
+	string _departed = "";       // the last action, for the DEPARTED row
+	int _dealt;                  // its total damage
 
 	Tuning T => _s.Data.Tuning;
 
@@ -82,7 +91,7 @@ public partial class BattleScreen : Control
 		ShowSpeed();
 
 		_b = new Battle(_s.Data, _s.Setup(), _encounter, _s.Mode, _s.Items, _s.Known, Random.Shared.Next());
-		_b.Emitted += _queue.Enqueue;
+		_b.Emitted += e => _queue.Enqueue((e, e.Target?.Body.Hp ?? 0));
 		_maxHp = _b.Party.Sum(p => p.Body.MaxHp);
 		_startHp = _b.Party.Sum(p => p.Body.Hp);
 		_tuning = GetNode<TuningPanel>("%Tuning");
@@ -135,13 +144,14 @@ public partial class BattleScreen : Control
 		if (handled) GetViewport().SetInputAsHandled();
 	}
 
+	/// <summary>Normal 1× → Fast 2× → Relaxed 0.75×. AnimSpeed scales durations, so 2× is 0.5.</summary>
 	void CycleSpeed()
 	{
-		_s.AnimSpeed = _s.AnimSpeed > 0.75 ? 0.5 : _s.AnimSpeed > 0.375 ? 0.25 : 1;
+		_s.AnimSpeed = _s.AnimSpeed switch { 1 => 0.5, 0.5 => 4 / 3.0, _ => 1 };
 		ShowSpeed();
 	}
 
-	void ShowSpeed() => _speed.Text = $"F  SPEED {(_s.AnimSpeed > 0 ? 1 / _s.AnimSpeed : 1):0}×";
+	void ShowSpeed() => _speed.Text = $"F  SPEED {(_s.AnimSpeed > 0 ? 1 / _s.AnimSpeed : 1):0.##}×";
 
 	void GoToSelect() => GetTree().ChangeSceneToFile("res://battle/select.tscn");
 
@@ -152,12 +162,14 @@ public partial class BattleScreen : Control
 	async void RunLoop()
 	{
 		_b.PauseAfterEachTurn = true;
+		Snapshot();
 		_b.Run();
 		if (OS.GetCmdlineUserArgs().Contains("--tuning")) _tuning.Toggle();   // start with the panel open
 		while (true)
 		{
 			await PlayEvents();
 			if (!IsInsideTree()) return;
+			_shownHp.Clear();
 			Refresh();
 			if (_b.Phase == BattlePhase.BattleEnd)
 			{
@@ -172,11 +184,13 @@ public partial class BattleScreen : Control
 			}
 			if (!_b.AwaitingInput)
 			{
+				Snapshot();
 				_b.Run();
 				continue;
 			}
 			var command = _s.Autoplay ? AutoPilot.Choose(_b) : await AskPlayer();
 			if (!IsInsideTree()) return;
+			Snapshot();
 			if (!_b.Submit(command))
 			{
 				GD.PrintErr($"The battle refused {command.Kind} in {_b.Phase}.");
@@ -189,51 +203,233 @@ public partial class BattleScreen : Control
 		}
 	}
 
+	/// <summary>The screen keeps drawing these HP values until the events that change them play.</summary>
+	void Snapshot()
+	{
+		_shownHp.Clear();
+		foreach (var u in _b.Party.Concat(_b.Enemies)) _shownHp[u.Body] = u.Body.Hp;
+	}
+
+	int Hp(Combatant u) => _shownHp.TryGetValue(u.Body, out var hp) ? hp : u.Body.Hp;
+
+	/// <summary>
+	/// Plays a turn's events as beats (battle-feedback research): hand-off, announce, wind-up, impact, result, board.
+	/// The battle state is already final, so HP is drawn from each event's own snapshot, and the board moves last.
+	/// </summary>
 	async Task PlayEvents()
 	{
-		while (_queue.TryDequeue(out var e))
+		bool played = false, strong = false;
+		while (_queue.TryDequeue(out var q))
 		{
+			if (!IsInsideTree()) return;
+			var (e, hp) = q;
 			if (e.Text != "") _log.AppendText((e.Kind == EventKind.TurnStart ? "\n" : "") + e.Text + "\n");
 			switch (e.Kind)
 			{
-				case EventKind.TurnStart:
+				case EventKind.TurnStart:   // beat 1: hand-off
+					played = true;
+					EndCallout();
 					_caption.Text = e.Text;
-					DrawChips();
-					await Pause(0.15);
-					break;
-				case EventKind.Action:
-					_caption.Text = e.Text;
+					_actor = e.Target;
+					_action = null;
+					_spotlight.Clear();
+					if (_actor != null) _spotlight.Add(_actor);
+					Redraw();
 					await Pause(0.35);
 					break;
+				case EventKind.Action:
+					played = true;
+					await Announce(e);
+					break;
 				case EventKind.CutIn or EventKind.ShiftChange or EventKind.Rush:
+					played = true;
+					EndCallout();
+					_action = null;
 					_caption.Text = e.Text;
 					Stamp(e.Kind switch { EventKind.CutIn => "CUT IN", EventKind.Rush => "RUSH!", _ => "SHIFT CHANGE" });
 					await Pause(0.5);
 					break;
-				case EventKind.Damage when e.Amount > 0:
-					Popup(e.Target, $"{e.Amount}", e.Target?.IsParty == true ? Ui.Danger : Ui.Text);
-					Flash(e.Target);
+				case EventKind.Damage when e.Amount > 0 && e.Target != null:
+					if (_action != null && e.Target != _actor) _dealt += (int)e.Amount;
+					await Impact(e.Target, $"{e.Amount}", e.Target.IsParty ? Ui.Danger : Ui.Text, strong, hp);
+					strong = false;
 					break;
-				case EventKind.Heal when e.Amount > 0:
+				case EventKind.Heal when e.Amount > 0 && e.Target != null:
 					Popup(e.Target, $"+{e.Amount}", Ui.Mint);
+					ShowHp(e.Target, hp);
+					await Pause(0.25);
 					break;
 				case EventKind.Weakness:
+					strong = true;
 					Popup(e.Target, "WEAK!", Ui.Amber);
+					break;
+				case EventKind.Crit:
+					strong = true;
 					break;
 				case EventKind.StaggerBreak:
 					Popup(e.Target, "STAGGERED!", Ui.Amber);
+					await Pause(0.5);
 					break;
 				case EventKind.KO:
 					Popup(e.Target, "DOWN", Ui.Danger);
 					break;
 			}
 		}
+		if (!played || !IsInsideTree()) return;
+		// beat 6: the dim lifts and the board moves, then the loop opens the next menu
+		EndCallout();
+		_spotlight.Clear();
+		_actor = null;
+		_action = null;
+		_shownHp.Clear();
+		Refresh();
+		await Pause(0.35);
 	}
 
-	async Task Pause(double seconds)
+	/// <summary>Beats 2 and 3: a callout over the actor (who · what → whom), its targets lit, then the wind-up.</summary>
+	async Task Announce(BattleEvent e)
+	{
+		EndCallout();
+		_actor = e.Target;
+		_action = e.Action;
+		var targets = UpcomingTargets();
+		_spotlight.UnionWith(targets);
+		if (_actor != null) _spotlight.Add(_actor);
+		var whom = _action?.Target is TargetType.AllEnemies or TargetType.AllAllies ? "ALL" : targets.FirstOrDefault()?.Def.Name.ToUpperInvariant();
+		var line = $"{_actor?.Def.Name.ToUpperInvariant()} · {_action?.Name ?? e.Text}" + (whom != null ? $" → {whom}" : "");
+		_departed = (_actor?.IsParty == true ? "● " : "◆ ") + line;
+		_dealt = 0;
+		_caption.Text = e.Text;
+		Redraw();
+		ShowCallout(line);
+		await Pause(0.7, min: 0.4);
+		await WindUp();
+	}
+
+	/// <summary>Who the action about to play touches: the targets of its events up to the next turn or action.</summary>
+	List<Combatant> UpcomingTargets() => _queue
+		.TakeWhile(q => q.E.Kind is not (EventKind.TurnStart or EventKind.Action or EventKind.CutIn or EventKind.ShiftChange or EventKind.Rush))
+		.Where(q => q.E.Kind is EventKind.Damage or EventKind.Heal or EventKind.Status or EventKind.Shield or EventKind.Delay or EventKind.Advance)
+		.Select(q => q.E.Target)
+		.OfType<Combatant>()
+		.Where(t => t != _actor)
+		.Distinct()
+		.ToList();
+
+	void ShowCallout(string line)
+	{
+		if (_s.AnimSpeed <= 0 || _actor == null || !_views.TryGetValue(_actor, out var view)) return;
+		var color = _actor.IsParty ? Ui.Member(_actor.Def.Id) : Ui.Danger;
+		// the board's shapes: a round badge for the party, a square one for enemies
+		_callout = Ui.Wrap(Ui.L(line, Ui.CondBold, 28, color), Ui.Box(Ui.Ground, color, 2, _actor.IsParty ? 22 : 3, 16, 6));
+		_callout.ZIndex = 9;
+		AddChild(_callout);
+		var size = _callout.GetCombinedMinimumSize();
+		_callout.Size = size;
+		var top = view.GlobalPosition.Y - size.Y - (_actor.IsParty ? 110 : 70);
+		var x = Math.Clamp(view.GlobalPosition.X + view.Size.X / 2 - size.X / 2, 400, Size.X - 40 - size.X);
+		_callout.GlobalPosition = new Vector2(x, Math.Max(96, top));
+	}
+
+	void EndCallout()
+	{
+		if (_callout != null && IsInstanceValid(_callout)) _callout.QueueFree();
+		_callout = null;
+	}
+
+	/// <summary>Enemies stand left of the party, so an enemy lunges right and a member left.</summary>
+	static float Toward(Combatant u) => u.IsParty ? -1 : 1;
+
+	static Vector2 Home(Control v) => v.HasMeta("home") ? (Vector2)v.GetMeta("home") : v.Position;
+
+	/// <summary>Beat 3: the actor pulls back and swells, longer for heavier moves.</summary>
+	async Task WindUp()
+	{
+		if (_s.AnimSpeed <= 0 || _actor == null || !_views.TryGetValue(_actor, out var v)) return;
+		double t = _action?.Weight switch { Weight.Light => 0.2, Weight.Heavy => 0.45, _ => 0.3 };
+		v.SetMeta("home", v.Position);
+		v.PivotOffset = v.Size / 2;
+		var tw = Anim(v);
+		tw.TweenProperty(v, "position:x", v.Position.X - 10 * Toward(_actor), t).SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.Out);
+		tw.Parallel().TweenProperty(v, "scale", Vector2.One * 1.06f, t);
+		await ToSignal(tw, Tween.SignalName.Finished);
+	}
+
+	/// <summary>Beats 4 and 5: lunge, hit-stop, flash and shake, the number, then the bar snaps with a ghost chunk.</summary>
+	async Task Impact(Combatant target, string text, Color color, bool strong, int hp)
+	{
+		if (_s.AnimSpeed > 0)
+		{
+			if (_action != null && _actor != null && _actor != target && _views.TryGetValue(_actor, out var a) && IsInstanceValid(a))
+			{
+				var home = Home(a);
+				a.PivotOffset = a.Size / 2;
+				var lunge = Anim(a);
+				lunge.TweenProperty(a, "position:x", home.X + 24 * Toward(_actor), 0.08).SetTrans(Tween.TransitionType.Quad).SetEase(Tween.EaseType.In);
+				await ToSignal(lunge, Tween.SignalName.Finished);
+				if (!IsInstanceValid(a)) return;
+				var back = Anim(a);
+				back.TweenProperty(a, "position", home, 0.18).SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.Out);
+				back.Parallel().TweenProperty(a, "scale", Vector2.One, 0.18);
+			}
+			await Pause(strong ? 0.1 : 0.05);   // hit-stop
+			Popup(target, text, color);
+			Flash(target);
+			if (_views.TryGetValue(target, out var v) && IsInstanceValid(v))
+			{
+				var x = v.Position.X;
+				var shake = Anim(v);
+				foreach (var dx in new[] { 8f, -6f, 3f, 0f })
+					shake.TweenProperty(v, "position:x", x + dx, 0.05).SetTrans(Tween.TransitionType.Sine);
+				await ToSignal(shake, Tween.SignalName.Finished);
+				if (hp == 0 && !target.IsParty && _holders.TryGetValue(target, out var h) && IsInstanceValid(h))
+				{
+					var fade = Anim(h);
+					fade.TweenProperty(h, "modulate:a", 0.0, 0.3);
+					await ToSignal(fade, Tween.SignalName.Finished);
+				}
+			}
+		}
+		ShowHp(target, hp);
+		await Pause(0.25);
+	}
+
+	void ShowHp(Combatant u, int hp)
+	{
+		_ghostHp[u.Body] = Hp(u);
+		_shownHp[u.Body] = hp;
+		Redraw();
+		_ghostHp.Clear();
+	}
+
+	/// <summary>The field and the chips; the board waits for beat 6.</summary>
+	void Redraw()
+	{
+		DrawField();
+		DrawChips();
+	}
+
+	/// <summary>Every playback tween: Godot runs it at the battle speed, so durations here are the 1× values.</summary>
+	Tween Anim(Node n) => CreateTween().BindNode(n).SetSpeedScale((float)(1 / _s.AnimSpeed));
+
+	/// <summary>An HP bar from the shown HP, with the chunk just lost draining away.</summary>
+	Control HpBar(Combatant u, int height)
+	{
+		double max = Math.Max(1, u.Body.MaxHp);
+		var bar = Ui.Bar(Hp(u) / max, Ui.HpFill, height, _ghostHp.TryGetValue(u.Body, out var g) ? g / max : 0);
+		if (_s.AnimSpeed > 0 && bar.GetNodeOrNull<CanvasItem>("Ghost") is { } ghost)
+		{
+			var tw = Anim(ghost);
+			tw.TweenInterval(0.25);
+			tw.TweenProperty(ghost, "modulate:a", 0.0, 0.35);
+		}
+		return bar;
+	}
+
+	async Task Pause(double seconds, double min = 0)
 	{
 		if (_s.AnimSpeed <= 0 || !IsInsideTree()) return;
-		await ToSignal(GetTree().CreateTimer(seconds * _s.AnimSpeed), SceneTreeTimer.SignalName.Timeout);
+		await ToSignal(GetTree().CreateTimer(Math.Max(seconds * _s.AnimSpeed, min)), SceneTreeTimer.SignalName.Timeout);
 	}
 
 	/// <summary>Redraws everything that shows battle state. Menus are drawn separately, when a choice is needed.</summary>
@@ -292,7 +488,15 @@ public partial class BattleScreen : Control
 				}
 			}
 			return BoardRow(now ? "NOW" : Ui.Clock(times[i]), u, tag, tagColor, now, marked.Contains(u));
-		}).ToList());
+		}).Prepend(hyp == null && _departed != "" ? DepartedRow() : null).OfType<Control>().ToList());
+	}
+
+	/// <summary>The last action, so a tester who looked away can still see what happened.</summary>
+	Control DepartedRow()
+	{
+		var what = Ui.L(_departed + (_dealt > 0 ? $" −{_dealt}" : ""), Ui.Cond, 17, Ui.Dim);
+		what.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+		return Ui.Wrap(Ui.V(0, Ui.L("DEPARTED", Ui.Mono, 12, Ui.Muted), what), Ui.Box(Ui.Row, null, 0, 8, 12, 6));
 	}
 
 	static Control BoardRow(string time, Combatant u, string tag, Color tagColor, bool now, bool marked)
@@ -335,10 +539,11 @@ public partial class BattleScreen : Control
 	{
 		Fill(_field, []);
 		_views.Clear();
+		_holders.Clear();
 		var outcomes = Forecast();
 		var hypTargets = _hover != null ? PreviewTargets(_hover).ToHashSet() : new HashSet<Combatant>();
 
-		var enemies = _b.Enemies.Where(e => e.Alive).ToList();
+		var enemies = _b.Enemies.Where(e => Hp(e) > 0).ToList();
 		float slot = EnemyWidth / Math.Max(1, enemies.Count);
 		for (int i = 0; i < enemies.Count; i++)
 			EnemyView(enemies[i], EnemyLeft + slot * (i + 0.5f), slot, outcomes.TryGetValue(enemies[i], out var o) ? o : null, hypTargets.Contains(enemies[i]));
@@ -346,6 +551,22 @@ public partial class BattleScreen : Control
 		float pslot = PartyWidth / Math.Max(1, _b.Party.Count);
 		for (int i = 0; i < _b.Party.Count; i++)
 			PartySprite(_b.Party[i], PartyLeft + pslot * (i + 0.5f), hypTargets.Contains(_b.Party[i]));
+
+		// during playback: the actor lifts, everyone it doesn't touch dims
+		if (_spotlight.Count == 0) return;
+		foreach (var (u, holder) in _holders)
+		{
+			if (!_spotlight.Contains(u)) holder.Modulate *= new Color(1, 1, 1, 0.6f);
+			if (u == _actor) holder.Position = new Vector2(0, -12);
+		}
+	}
+
+	Control Holder(Combatant u)
+	{
+		var holder = new Control { MouseFilter = MouseFilterEnum.Ignore };
+		_field.AddChild(holder);
+		_holders[u] = holder;
+		return holder;
 	}
 
 	Dictionary<Combatant, Outcome> Forecast()
@@ -408,16 +629,17 @@ public partial class BattleScreen : Control
 		var (size, round) = ShapeOf(e.Def);
 		size *= Math.Min(1f, (slot - 24) / size.X);
 		bool acting = e == _cutInActor;
+		var holder = Holder(e);
 		var shape = new Panel { Position = new Vector2(cx - size.X / 2, Floor - size.Y), Size = size, MouseFilter = MouseFilterEnum.Ignore };
 		shape.AddThemeStyleboxOverride("panel", Ui.Box(Ui.Shape, targeted ? Ui.Amber : acting ? Ui.Danger : Ui.Muted, targeted || acting ? 3 : 2,
 			round ? (int)(Math.Min(size.X, size.Y) / 2) : 12));
-		_field.AddChild(shape);
+		holder.AddChild(shape);
 		_views[e] = shape;
 
 		float top = shape.Position.Y - 10;
 		if (IntentText(e) is { Length: > 0 } intent)
 		{
-			var chip = Place(_field, Ui.Chip(intent, e.Intent!.Intent == Intent.Recover ? Ui.Dim : Ui.Danger, size: 16), cx, top, above: true);
+			var chip = Place(holder, Ui.Chip(intent, e.Intent!.Intent == Intent.Recover ? Ui.Dim : Ui.Danger, size: 16), cx, top, above: true);
 			top = chip.Position.Y - 8;
 		}
 		if (o is { } f && !_rushPreview)
@@ -426,9 +648,9 @@ public partial class BattleScreen : Control
 			if (f.Tags != "") card.AddChild(Ui.L(f.Tags, Ui.CondBold, 16));
 			if (f.StaggerAfter == 0 && e.Body.Stagger > 0) card.AddChild(Ui.L("BREAKS STAGGER", Ui.CondBold, 16, Ui.Amber));
 			if (_inspect && _hover?.Action is { } a) card.AddChild(Ui.L($"Power {a.Power:0.0#} · Stagger {a.Stagger}", Ui.Mono, 14, Ui.Dim));
-			Place(_field, Ui.Wrap(card, Ui.Box(Ui.Raised, Ui.Amber, 2, 10, 12, 8)), cx, top, above: true);
+			Place(holder, Ui.Wrap(card, Ui.Box(Ui.Raised, Ui.Amber, 2, 10, 12, 8)), cx, top, above: true);
 		}
-		Place(_field, Plate(e, Math.Clamp(slot - 16, 170, 240), o, targeted), cx, Floor + 16, above: false);
+		Place(holder, Plate(e, Math.Clamp(slot - 16, 170, 240), o, targeted), cx, Floor + 16, above: false);
 	}
 
 	/// <summary>One glyph-like word and a number, over the enemy: "ATK ×3 → ROOK", "NOTICE IN 2".</summary>
@@ -455,13 +677,13 @@ public partial class BattleScreen : Control
 
 	Control Plate(Combatant e, float width, Outcome? o, bool targeted)
 	{
-		var hp = o is { } f ? $"{e.Body.Hp} → {(f.HpAfter == 0 ? "KO" : f.HpAfter)}" : $"{e.Body.Hp}";
+		var hp = o is { } f ? $"{Hp(e)} → {(f.HpAfter == 0 ? "KO" : f.HpAfter)}" : $"{Hp(e)}";
 		var name = Ui.L(e.Def.Name.ToUpperInvariant(), Ui.CondBold, 18);
 		name.SizeFlagsHorizontal = SizeFlags.ExpandFill;
 		name.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
 		name.ClipText = true;
 		var box = Ui.V(6, Ui.H(8, name, Ui.L(hp, Ui.MonoBold, 16, o != null ? Ui.Amber : Ui.Dim)),
-			Ui.Bar(e.Body.Hp / (double)Math.Max(1, e.Body.MaxHp), Ui.HpFill, 6));
+			HpBar(e, 6));
 		if (e.Body.MaxStagger > 0) box.AddChild(e.Body.Staggered ? Ui.Chip("STAGGERED", Ui.Text) : Pips(e, o));
 
 		var chips = new HFlowContainer { MouseFilter = MouseFilterEnum.Ignore };
@@ -508,17 +730,17 @@ public partial class BattleScreen : Control
 	void PartySprite(Combatant m, float cx, bool targeted)
 	{
 		var color = Ui.Member(m.Def.Id);
-		var holder = new Control { MouseFilter = MouseFilterEnum.Ignore, Modulate = m.Alive ? Colors.White : Ui.Faint };
-		_field.AddChild(holder);
+		var holder = Holder(m);
+		holder.Modulate = Hp(m) > 0 ? Colors.White : Ui.Faint;
 		var body = new Panel { Position = new Vector2(cx - 48, Floor - 150), Size = new Vector2(96, 150), MouseFilter = MouseFilterEnum.Ignore };
 		var bodyStyle = Ui.Box(new Color("#141C33"), targeted ? Ui.Amber : color, 3, 12);
 		bodyStyle.CornerRadiusTopLeft = bodyStyle.CornerRadiusTopRight = 40;
 		body.AddThemeStyleboxOverride("panel", bodyStyle);
-		var head = new Panel { Position = new Vector2(cx - 28, Floor - 150 - 64), Size = new Vector2(56, 56), MouseFilter = MouseFilterEnum.Ignore };
+		var head = new Panel { Position = new Vector2(20, -64), Size = new Vector2(56, 56), MouseFilter = MouseFilterEnum.Ignore };
 		head.AddThemeStyleboxOverride("panel", Ui.Box(new Color("#141C33"), targeted ? Ui.Amber : color, 3, 28));
 		holder.AddChild(body);
-		holder.AddChild(head);
-		Place(holder, Ui.L(m.Def.Name.ToUpperInvariant(), Ui.CondBold, 20, color), cx, head.Position.Y - 6, above: true);
+		body.AddChild(head);   // the head rides on the body, so a lunge or shake moves both
+		Place(holder, Ui.L(m.Def.Name.ToUpperInvariant(), Ui.CondBold, 20, color), cx, Floor - 150 - 64 - 6, above: true);
 		_views[m] = body;
 	}
 
@@ -563,9 +785,9 @@ public partial class BattleScreen : Control
 				Centered(ring, Ui.MonoBold, "Q", new Vector2(56, 56), 16, Ui.Ground);
 			}
 		};
-		var top = Ui.H(8, Ui.L(m.Def.Name.ToUpperInvariant(), Ui.CondBold, 22, color), Ui.Spacer(), Ui.L($"{m.Body.Hp}", Ui.MonoBold, 18));
+		var top = Ui.H(8, Ui.L(m.Def.Name.ToUpperInvariant(), Ui.CondBold, 22, color), Ui.Spacer(), Ui.L($"{Hp(m)}", Ui.MonoBold, 18));
 		if (m.Shield > 0) top.AddChild(Ui.L($"+{m.Shield}", Ui.MonoBold, 16, Ui.Mint));
-		var col = Ui.V(6, top, Ui.Bar(m.Body.Hp / (double)Math.Max(1, m.Body.MaxHp), Ui.HpFill, 8));
+		var col = Ui.V(6, top, HpBar(m, 8));
 		col.SizeFlagsHorizontal = SizeFlags.ExpandFill;
 		col.SizeFlagsVertical = SizeFlags.ShrinkCenter;
 		if (m.Statuses.Count > 0) col.AddChild(Ui.L(StatusText(m).ToUpperInvariant(), Ui.Cond, 15, Ui.Dim));
@@ -573,7 +795,7 @@ public partial class BattleScreen : Control
 		var chip = Ui.Wrap(Ui.H(12, ring, col), Ui.Box(Ui.Panel, active ? Ui.Amber : Ui.Line, active ? 2 : 1, 12, 14, active ? 14 : 8));
 		chip.CustomMinimumSize = new Vector2(active ? 290 : 250, 0);
 		chip.SizeFlagsVertical = SizeFlags.ShrinkEnd;
-		if (!m.Alive) chip.Modulate = Ui.Faint;
+		if (Hp(m) == 0) chip.Modulate = Ui.Faint;
 		_chipOf[m] = chip;
 		return chip;
 	}
@@ -989,11 +1211,11 @@ public partial class BattleScreen : Control
 		tween.TweenCallback(Callable.From(label.QueueFree));
 	}
 
-	/// <summary>Hit feedback: a red flash on the shape.</summary>
+	/// <summary>Hit feedback: one white flash on the shape.</summary>
 	void Flash(Combatant? u)
 	{
 		if (u == null || _s.AnimSpeed <= 0 || !_views.TryGetValue(u, out var view) || !IsInstanceValid(view)) return;
-		view.Modulate = Ui.Danger;
+		view.Modulate = new Color(2.5f, 2.5f, 2.5f);
 		view.CreateTween().TweenProperty(view, "modulate", Colors.White, 0.25 * _s.AnimSpeed);
 	}
 
